@@ -581,7 +581,7 @@ function updatePlayBtn() {
 }
 let infoT = 0;
 function updateInfo() {
-  if (!book) return;
+  if (!book || retired) return;
   const now = Date.now();
   if (now - infoT < 250) { clearTimeout(updateInfo.t); updateInfo.t = setTimeout(updateInfo, 260); return; }
   infoT = now;
@@ -859,6 +859,40 @@ document.addEventListener('keydown', (e) => {
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
 if ('serviceWorker' in navigator && !MOCK && location.protocol === 'https:') navigator.serviceWorker.register('./sw.js');
 setStatus(MOCK ? 'Mock voice (testing mode)' : 'Loading voice engine…');
+
+// ---------- only one Reader runs the voice engine at a time ----------
+// Every "Open in Reader" opens a new tab; without this, each open tab would run
+// its own copy of the voice engine on the GPU. The newest Reader wins and older
+// ones pause and shut their engine down.
+const instanceId = Math.random().toString(36).slice(2);
+let retired = false;
+try {
+  const bc = new BroadcastChannel('novel-reader');
+  bc.onmessage = (e) => { if (e.data && e.data.type === 'hello' && e.data.id !== instanceId && !retired) retire(); };
+  bc.postMessage({ type: 'hello', id: instanceId });
+} catch {}
+function retire() {
+  retired = true;
+  pause();
+  if (tape) tape.stop();
+  prep = null;
+  try { wakeLock?.release(); } catch {}
+  worker.terminate();
+  ttsReady = false;
+  el.removeAttribute('src'); el.load();
+  closePanels();
+  const note = document.createElement('div');
+  note.className = 'retired-note';
+  note.setAttribute('role', 'alert');
+  const t = document.createElement('p');
+  t.textContent = 'The Reader is open in another tab, so this one has paused and switched its voice engine off to save the GPU.';
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.className = 'btn primary'; btn.textContent = 'Use this tab instead';
+  btn.onclick = () => location.reload();
+  note.append(t, btn);
+  document.body.appendChild(note);
+  setStatus('Paused: open in another tab');
+}
 // ---------- bookmarklet installer ----------
 const APP_URL = location.origin + location.pathname.replace(/[^/]*$/, '');
 async function buildBookmarklet() {

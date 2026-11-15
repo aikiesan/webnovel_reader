@@ -174,18 +174,18 @@ try {
       book: { id: bookKey, title: bookName, source: location.origin },
       chapters: chapters.map(({ id, index, title, paras }) => ({ id, index, title, paras })),
     };
-    msg(`Got ${chapters.length} chapter(s). How do you want to listen?`);
+    msg(`Got ${chapters.length} chapter${chapters.length > 1 ? 's' : ''}. Open them in the Reader to listen.`);
     const appOrigin = new URL(APP).origin;
 
-    const floatBtn = h('button', btnCss(ACC) + ';padding:14px 0', 'Play here in a floating player');
+    const floatBtn = h('button', 'background:none;border:0;color:' + MUTED + ';font:500 14px system-ui,sans-serif;text-decoration:underline;text-underline-offset:3px;padding:10px 0 2px;cursor:pointer', 'Or play on this page in a small player (slower)');
     // A real link (not window.open) so pop-up blockers leave it alone. The chapters
     // travel inside the link itself (#import=…, compressed); the part after # is
     // never sent to any server.
-    const tabLink = h('a', btnCss('transparent', INK) + ';box-shadow:inset 0 0 0 1.5px ' + INK + ';padding:14px 0;display:block;text-align:center;text-decoration:none;box-sizing:border-box', 'Open in the Reader tab');
+    const tabLink = h('a', btnCss(ACC) + ';padding:16px 0;display:block;text-align:center;text-decoration:none;box-sizing:border-box;font-size:17px', 'Open in Reader');
     tabLink.target = '_blank';
     tabLink.rel = 'opener';
     tabLink.href = APP + '?import=1';
-    actions.append(floatBtn, tabLink);
+    actions.append(tabLink, floatBtn);
     (async () => {
       try {
         const bytes = new TextEncoder().encode(JSON.stringify(payload));
