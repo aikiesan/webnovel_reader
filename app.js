@@ -499,9 +499,9 @@ setStatus(MOCK ? 'Mock voice (testing mode)' : 'Loading voice engine…');
 // ---------- bookmarklet installer ----------
 const APP_URL = location.origin + location.pathname.replace(/[^/]*$/, '');
 async function buildBookmarklet() {
-  const src = await (await fetch('grab.js', { cache: 'no-cache' })).text();
-  const code = src.replace(/^\s*\/\*[\s\S]*?\*\/\s*/, '').replace('__APP_URL__', APP_URL);
-  return 'javascript:' + encodeURIComponent(code);
+  const src = await (await fetch('grab.min.js', { cache: 'no-cache' })).text();
+  const code = src.trim().replace('__APP_URL__', APP_URL);
+  return 'javascript:' + code.replace(/[%#]/g, encodeURIComponent);
 }
 const shortBookmarklet = () => `javascript:(function(){var s=document.createElement('script');s.charset='utf-8';s.onerror=function(){alert('Site blocked the SHORT bookmarklet. Use the FULL one.')};s.src='${APP_URL}grab.js?'+Date.now();document.documentElement.appendChild(s)})()`;
 $('#bm-card').addEventListener('toggle', async (e) => {

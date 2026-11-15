@@ -1,7 +1,7 @@
 // Offline support: app shell is served cache-first with background refresh.
 // The voice model itself is cached by transformers.js in its own cache.
-const CACHE = 'reader-v3';
-const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'epub.js', 'tts-worker.js', 'grab.js', 'vendor/jszip.min.js', 'vendor/kokoro.web.js', 'manifest.webmanifest', 'icon.svg', 'icon-512.png'];
+const CACHE = 'reader-v4';
+const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'epub.js', 'tts-worker.js', 'grab.js', 'grab.min.js', 'vendor/jszip.min.js', 'vendor/kokoro.web.js', 'manifest.webmanifest', 'icon.svg', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
