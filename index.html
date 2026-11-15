@@ -59,12 +59,16 @@
       <summary>📲 Webnovel.com button (bookmarklet)</summary>
       <p>Chrome on Android has no extensions, but a <b>bookmarklet</b> does the same job: on any webnovel.com chapter page it grabs that chapter and the next ones (including ones you've unlocked) and sends them here.</p>
       <ol>
-        <li>Tap <b>Copy bookmarklet</b>.</li>
+        <li>Tap <b>Copy SHORT bookmarklet</b>.</li>
         <li>In Chrome, bookmark any page (⋮ → ☆). Then ⋮ → Bookmarks → long-press it → <b>Edit</b>.</li>
         <li>Name it <code>reader</code>, replace the URL with the copied text, save.</li>
         <li>On a webnovel chapter, tap the address bar, type <code>reader</code> and tap the bookmark result (the one with the ☆, not a search).</li>
       </ol>
-      <button id="copy-bm" class="btn">Copy bookmarklet</button>
+      <button id="copy-short" class="btn">Copy SHORT bookmarklet</button>
+      <span id="copy-short-msg" class="muted"></span>
+      <textarea id="bm-short" readonly rows="3"></textarea>
+      <p class="muted">If the short one does nothing, try the full version (larger, but doesn't need to download anything):</p>
+      <button id="copy-bm" class="btn">Copy FULL bookmarklet</button>
       <span id="copy-msg" class="muted"></span>
       <textarea id="bm-code" readonly rows="3"></textarea>
     </details>

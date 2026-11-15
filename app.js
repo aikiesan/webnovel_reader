@@ -503,9 +503,17 @@ async function buildBookmarklet() {
   const code = src.replace(/^\s*\/\*[\s\S]*?\*\/\s*/, '').replace('__APP_URL__', APP_URL);
   return 'javascript:' + encodeURIComponent(code);
 }
+const shortBookmarklet = () => `javascript:(function(){var s=document.createElement('script');s.charset='utf-8';s.src='${APP_URL}grab.js?'+Date.now();document.body.appendChild(s)})()`;
 $('#bm-card').addEventListener('toggle', async (e) => {
   if (e.target.open && !$('#bm-code').value) $('#bm-code').value = await buildBookmarklet();
+  if (e.target.open) $('#bm-short').value = shortBookmarklet();
 });
+$('#copy-short').onclick = async () => {
+  const code = shortBookmarklet();
+  $('#bm-short').value = code;
+  try { await navigator.clipboard.writeText(code); $('#copy-short-msg').textContent = ' Copied ✓'; }
+  catch { $('#bm-short').select(); document.execCommand('copy'); $('#copy-short-msg').textContent = ' Copied'; }
+};
 $('#copy-bm').onclick = async () => {
   const code = $('#bm-code').value || (await buildBookmarklet());
   $('#bm-code').value = code;

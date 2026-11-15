@@ -2,7 +2,11 @@
    It reads chapters YOUR logged-in browser can already see and hands them
    to the reader app on your phone. Nothing is uploaded anywhere. */
 (() => {
-  const APP = '__APP_URL__';
+  let APP = '__APP_URL__';
+  if (APP.startsWith('__')) { // loaded via the short loader: derive app URL from this script's own address
+    const me = document.currentScript || Array.from(document.scripts).find((x) => /\/grab\.js/.test(x.src));
+    APP = me ? me.src.replace(/grab\.js.*$/, '') : 'https://aikiesan.github.io/webnovel_reader/';
+  }
   if (window.__wnGrab) { window.__wnGrab.show(); return; }
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
