@@ -140,6 +140,21 @@
     <label class="row">Speed <span id="rate-val"></span>
       <input id="rate" name="rate" type="range" min="0.7" max="2.5" step="0.05">
     </label>
+    <label class="row">GPU use
+      <select id="gpu" name="gpu">
+        <option value="gentle">Gentle: rests between passages, cooler phone</option>
+        <option value="balanced">Balanced</option>
+        <option value="fast">Fast: flat out until the buffer is full</option>
+      </select>
+    </label>
+    <label class="row">Keep ready ahead while listening
+      <select id="ahead" name="ahead">
+        <option value="10">10 minutes</option>
+        <option value="30">30 minutes</option>
+        <option value="60">1 hour</option>
+        <option value="120">2 hours</option>
+      </select>
+    </label>
     <label class="row">Engine
       <select id="device" name="device">
         <option value="auto">Auto (GPU if available)</option>
@@ -154,6 +169,7 @@
       </select>
     </label>
     <p class="muted">Voice: Kokoro-82M, open source and running on your device. The first launch downloads about 330 MB (use Wi-Fi); after that it works offline. Lock-screen and headphone buttons skip back or forward one passage.</p>
+    <p class="muted">While you listen with the screen on, the app keeps the chosen amount saved ahead, so you can turn the screen off at any moment. When it gets close to running out, the engine works at full speed whatever the GPU setting.</p>
   </div>
 </section>
 </body>

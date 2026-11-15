@@ -20,7 +20,10 @@ const VOICES = [
   ['af_sarah', 'Sarah (US, female)'],
 ];
 const AHEAD_CHUNKS = 60;   // passages kept loaded in memory ahead of the reading position
-const LIVE_AHEAD_SECS = 600; // while just listening, generate up to ~10 min ahead, then let the GPU rest
+const URGENT_SECS = 90;      // below this much listening time ready, the engine runs flat out
+// GPU use: after each passage the engine rests for (passage work time × factor).
+// 2.5 means the GPU works ~30% of the time; 0 means flat out.
+const PACE = { gentle: { relaxed: 2.5, prep: 1 }, balanced: { relaxed: 1, prep: 0.4 }, fast: { relaxed: 0, prep: 0 } };
 const MAX_INFLIGHT = 2;
 const CHUNK_VER = 2;       // bump when buildChunks() changes, so saved audio is regenerated
 
@@ -33,7 +36,10 @@ const settings = {
   voice: store.get('voice', 'af_heart'),
   rate: store.get('rate', 1.0),
   device: store.get('device', 'auto'),
+  gpu: store.get('gpu', 'gentle'),
+  aheadMin: store.get('aheadMin', 30), // keep this many minutes saved ahead while listening
 };
+const aheadTarget = () => settings.aheadMin * 60 * settings.rate; // in audio seconds
 
 // ---------- IndexedDB ----------
 let dbp = null;
@@ -222,6 +228,7 @@ worker.onmessage = (e) => {
     }
     if (m.type === 'audio') {
       lastGenSpeed = m.dur / (m.ms / 1000);
+      if (document.hidden) away.made += m.dur;
       putAudio({ k: job.k, book: job.bookId, ch: job.ch, i: job.i, voice: job.voice, dur: m.dur, blob: m.blob })
         .catch((err) => { console.warn('could not save audio', err); setStatus('Phone storage full? Could not save audio.'); });
       if (book && book.id === job.bookId) {
@@ -301,13 +308,13 @@ function fill() {
   // 2) generate what's missing right ahead of the listener
   let ahead = 0;
   p = pos;
-  for (let n = 0; n <= AHEAD_CHUNKS && p && genInflight() < MAX_INFLIGHT; n++, p = step(p)) {
+  for (let n = 0; n <= 3000 && p && genInflight() < MAX_INFLIGHT; n++, p = step(p)) {
     const k = akey(p);
     const d = stored.get(k);
     if (d != null) { ahead += d; continue; }
     if (mem.has(k) || isPending(k)) { ahead += 15; continue; }
     if (!playing && !prep && n > 3) break;           // idle: only warm up the first few
-    if (ahead > LIVE_AHEAD_SECS && !prep) break;     // far enough ahead: let the GPU rest (less lag)
+    if (ahead > aheadTarget() && !prep) break;       // far enough ahead: the GPU rests completely
     requestGen(p);
   }
   // 3) "Prepare chapters": keep generating everything in the chosen range
@@ -321,6 +328,17 @@ function fill() {
     }
     if (!q || q.ch > prep.to) { if (!genInflight()) finishPrepare(); }
   }
+  setPace();
+}
+
+// Tell the engine how hard to work: flat out when the listener is about to run
+// out of audio, otherwise with rests in between so the GPU stays cool.
+let lastPace = -1;
+function setPace() {
+  const ahead = secsAhead() / settings.rate;
+  const prof = PACE[settings.gpu] || PACE.gentle;
+  const f = ahead < URGENT_SECS && playing ? 0 : prep ? prof.prep : prof.relaxed;
+  if (f !== lastPace) { lastPace = f; worker.postMessage({ type: 'pace', factor: f }); }
 }
 
 function resetMem() {
@@ -338,6 +356,7 @@ function playCurrent() {
   updateMediaSession();
   if (!playing) return;
   if (!a) {
+    if (document.hidden && !waiting) away.stalls++;
     waiting = true;
     if (el.src !== silentUrl) { el.loop = true; el.src = silentUrl; el.play().catch(() => {}); }
     setStatus(ttsReady || stored.has(akey(pos)) ? 'Generating…' : 'Loading voice engine…');
@@ -367,7 +386,7 @@ function next() {
   playCurrent();
 }
 
-el.addEventListener('ended', () => { if (!waiting) next(); });
+el.addEventListener('ended', () => { if (document.hidden) away.played += el.duration || 0; if (!waiting) next(); });
 
 function play() {
   if (!book) return;
@@ -427,8 +446,24 @@ function finishPrepare() {
   updateInfo();
   if (done) setStatus(`Chapters ${done.from + 1} to ${done.to + 1} are saved. You can lock the phone.`);
 }
+// What happened while the screen was off / the app was in the background.
+const away = { since: 0, played: 0, made: 0, stalls: 0, wasPlaying: false };
 document.addEventListener('visibilitychange', async () => {
-  if (document.visibilityState === 'visible' && prep && !wakeLock) { try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {} }
+  if (document.hidden) {
+    Object.assign(away, { since: Date.now(), played: 0, made: 0, stalls: 0, wasPlaying: playing });
+    return;
+  }
+  if (prep && !wakeLock) { try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {} }
+  const gone = (Date.now() - away.since) / 1000;
+  if (away.since && away.wasPlaying && gone > 20) {
+    const m = (x) => (x < 90 ? `${Math.round(x)} s` : `${Math.round(x / 60)} min`);
+    const msg = `While away (${m(gone)}): played ${m(away.played / settings.rate)}, made ${m(away.made)} of new audio` +
+      (away.stalls ? `, ran out ${away.stalls} time${away.stalls > 1 ? 's' : ''}` : ', never ran out');
+    setStatus(msg);
+    store.set('lastAway', { at: Date.now(), msg });
+    clearTimeout(updateInfo.t); infoT = Date.now() + 8000; // keep the message up for a few seconds
+  }
+  away.since = 0;
 });
 function prepStats() {
   // how many chapters from the current one are fully saved, and how long they last
@@ -735,6 +770,12 @@ $('#speed-btn').onclick = () => {
 const devSel = $('#device');
 devSel.value = settings.device;
 devSel.onchange = () => { store.set('device', devSel.value); location.reload(); };
+const gpuSel = $('#gpu');
+gpuSel.value = settings.gpu;
+gpuSel.onchange = () => { settings.gpu = gpuSel.value; store.set('gpu', settings.gpu); lastPace = -1; setPace(); };
+const aheadSel = $('#ahead');
+aheadSel.value = String(settings.aheadMin);
+aheadSel.onchange = () => { settings.aheadMin = Number(aheadSel.value); store.set('aheadMin', settings.aheadMin); fill(); updateInfo(); };
 const modeSel = $('#mode');
 modeSel.value = store.get('mode', 'auto');
 modeSel.onchange = () => {

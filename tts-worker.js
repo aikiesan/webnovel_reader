@@ -6,6 +6,8 @@ let mock = false;
 const queue = [];
 let busy = false;
 let holdUntil = 0; // main thread asks us to pause briefly while the user is touching the UI
+let pace = 0;      // rest for (work time × pace) after each passage, so the GPU isn't busy all the time
+let restUntil = 0;
 
 // ---------- WAV (fallback when WebCodecs Opus is unavailable) ----------
 function toWav(samples, rate) {
@@ -157,7 +159,8 @@ async function pump() {
   if (busy) return;
   busy = true;
   while (queue.length) {
-    while (Date.now() < holdUntil) await sleep(Math.min(250, holdUntil - Date.now()));
+    // rests are re-checked every 100 ms, so they end at once if the app says audio is urgent
+    while (Date.now() < Math.max(holdUntil, pace > 0 ? restUntil : 0)) await sleep(100);
     const job = queue.shift();
     if (!job) break;
     const t0 = performance.now();
@@ -175,7 +178,9 @@ async function pump() {
       }
       samples = shape(samples, rate, job.pad);
       const blob = await encode(samples, rate);
-      postMessage({ type: 'audio', id: job.id, blob, dur: samples.length / rate, ms: performance.now() - t0 });
+      const ms = performance.now() - t0;
+      restUntil = Date.now() + ms * pace;
+      postMessage({ type: 'audio', id: job.id, blob, dur: samples.length / rate, ms });
     } catch (e) {
       postMessage({ type: 'error', id: job.id, msg: String(e) });
     }
@@ -195,6 +200,9 @@ onmessage = async (e) => {
     const ids = queue.filter((j) => !j.preview).map((j) => j.id);
     queue.length = 0; queue.push(...keep);
     postMessage({ type: 'dropped', ids });
+  } else if (m.type === 'pace') {
+    pace = m.factor;
+    if (!pace) restUntil = 0;
   } else if (m.type === 'hold') {
     holdUntil = Math.max(holdUntil, Date.now() + m.ms);
   }
