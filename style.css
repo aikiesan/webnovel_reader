@@ -211,6 +211,8 @@ input[type=search]::placeholder { color: var(--color-muted); }
 input[type=range] { width: 100%; accent-color: var(--color-accent); min-height: 44px; }
 #rate-val { font-variant-numeric: tabular-nums; color: var(--color-ink); }
 #more-chapters { margin-top: var(--space-md); }
+.log { white-space: pre-wrap; font: var(--text-sm)/1.5 var(--font-body); color: var(--color-ink-2); background: var(--color-paper-2); border-radius: var(--radius-card); padding: var(--space-md) var(--space-lg); margin: 0; }
+h3.row { font-family: var(--font-body); }
 
 /* the screen-off sheet: one figure as the section */
 .grained { position: relative; isolation: isolate; }

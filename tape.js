@@ -102,8 +102,11 @@ export class Tape {
     this.token = 0;
     this.entries = [];
     this.active = false;
-    this.aheadSecs = 240; // how much is appended to the stream in advance
+    this.aheadSecs = 240; // how much is appended to the stream in advance (raised while the screen is off)
+    this.full = false;    // the browser's buffer quota was reached
     audioEl.addEventListener('timeupdate', () => this.tick());
+    // top up on a timer too, in case timeupdate events are throttled in the background
+    setInterval(() => this.pump(), 2000);
   }
 
   // Start a fresh stream at `pos`. Returns once the stream can accept data.
@@ -145,7 +148,10 @@ export class Tape {
       const bad = () => { sb.removeEventListener('updateend', ok); rej(new Error('append failed')); };
       sb.addEventListener('updateend', ok, { once: true });
       sb.addEventListener('error', bad, { once: true });
-      sb.appendBuffer(bytes);
+      try { sb.appendBuffer(bytes); } catch (e) {
+        sb.removeEventListener('updateend', ok); sb.removeEventListener('error', bad);
+        if (e.name === 'QuotaExceededError') res(false); else rej(e);
+      }
     });
   }
 
@@ -160,7 +166,7 @@ export class Tape {
     this.pumping = true;
     const token = this.token;
     try {
-      while (token === this.token && this.bufferedEnd() - this.audioEl.currentTime < this.aheadSecs) {
+      while (token === this.token && !this.full && this.bufferedEnd() - this.audioEl.currentTime < this.aheadSecs) {
         const pos = this.lastPos ? this.next(this.lastPos) : this.startPos;
         if (!pos) {
           this.done = true;
@@ -175,7 +181,7 @@ export class Tape {
         if (token !== this.token) return;
         if (!this.headSent) { await this.appendBytes(webmInit(head)); this.headSent = true; }
         const start = this.bufferedEnd();
-        await this.appendBytes(webmClusters(audio));
+        if ((await this.appendBytes(webmClusters(audio))) === false) { this.full = true; break; } // buffer full: retry after trimming
         if (token !== this.token) return;
         this.entries.push({ pos, start, end: this.bufferedEnd() });
         this.lastPos = pos;
@@ -185,6 +191,11 @@ export class Tape {
       if (token === this.token && t > 120 && this.sb.buffered.length && this.sb.buffered.start(0) < t - 90) {
         await new Promise((res) => { this.sb.addEventListener('updateend', res, { once: true }); this.sb.remove(0, t - 60); });
         this.entries = this.entries.filter((e) => e.end > t - 60);
+        this.full = false;
+      } else if (this.full && t - (this.sb.buffered.length ? this.sb.buffered.start(0) : t) > 30) {
+        await new Promise((res) => { this.sb.addEventListener('updateend', res, { once: true }); this.sb.remove(0, t - 20); });
+        this.entries = this.entries.filter((e) => e.end > t - 20);
+        this.full = false;
       }
     } catch (e) {
       if (token === this.token && this.onError) this.onError(e);

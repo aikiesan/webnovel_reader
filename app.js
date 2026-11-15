@@ -206,8 +206,10 @@ const silentUrl = (() => {
 })();
 
 // ---------- TTS worker ----------
-const worker = new Worker('./tts-worker.js', { type: 'module' });
-worker.onmessage = (e) => {
+let worker = null;
+let lastPace = -1; // last rest factor sent to the engine
+const genErrors = new Map(); // audio key -> failures; a passage is only skipped after 3
+const onWorkerMessage = (e) => {
   const m = e.data;
   if (m.type === 'progress') {
     setStatus(`Downloading voice model… ${(m.loaded / 1e6).toFixed(0)} / ${(m.total / 1e6).toFixed(0)} MB (one-time)`);
@@ -238,7 +240,11 @@ worker.onmessage = (e) => {
       }
     } else {
       console.error(m.msg);
-      if (book && book.id === job.bookId) mem.set(job.k, { failed: true, dur: 0, ch: job.ch, i: job.i });
+      const n = (genErrors.get(job.k) || 0) + 1;
+      genErrors.set(job.k, n);
+      if (document.hidden) logAway('voice engine error: ' + String(m.msg).slice(0, 80));
+      // a GPU hiccup (e.g. while the screen turns off) is retried; only a passage that keeps failing is skipped
+      if (n >= 3 && book && book.id === job.bookId) mem.set(job.k, { failed: true, dur: 0, ch: job.ch, i: job.i });
     }
     if (waiting && book && job.k === akey(pos)) playCurrent();
     if (tape && tape.active) tape.pump();
@@ -249,7 +255,27 @@ worker.onmessage = (e) => {
     fill();
   }
 };
-worker.postMessage({ type: 'load', device: settings.device, isMock: MOCK });
+function startWorker() {
+  worker = new Worker('./tts-worker.js', { type: 'module' });
+  worker.onmessage = onWorkerMessage;
+  lastPace = -1;
+  worker.postMessage({ type: 'load', device: settings.device, isMock: MOCK });
+}
+startWorker();
+// Watchdog: if the engine hangs on a passage (it can happen when the GPU is
+// taken away, e.g. as the screen turns off), restart it instead of waiting forever.
+setInterval(() => {
+  if (!ttsReady || retired) return;
+  let oldest = Infinity;
+  for (const j of pending.values()) if (!j.preview && j.t) oldest = Math.min(oldest, j.t);
+  if (Date.now() - oldest < 90000) return;
+  logAway('voice engine stuck, restarted');
+  console.warn('voice engine stuck, restarting');
+  worker.terminate();
+  pending.clear();
+  ttsReady = false;
+  startWorker();
+}, 15000);
 const devName = () => (ttsDevice === 'webgpu' ? 'GPU' : ttsDevice === 'wasm' ? 'CPU – slower' : ttsDevice);
 
 const genInflight = () => { let n = 0; for (const j of pending.values()) if (!j.preview) n++; return n; };
@@ -266,7 +292,7 @@ const inWindow = (p) => bounds && cmp(p, bounds.lo) >= 0 && cmp(p, bounds.hi) <=
 function requestGen(p) {
   const k = akey(p);
   const id = ++reqId;
-  pending.set(id, { k, ch: p.ch, i: p.i, voice: settings.voice, bookId: book.id });
+  pending.set(id, { k, ch: p.ch, i: p.i, voice: settings.voice, bookId: book.id, t: Date.now() });
   worker.postMessage({ type: 'gen', id, text: chunksOf(p.ch)[p.i].text, voice: settings.voice, pad: chunksOf(p.ch)[p.i].pad });
 }
 
@@ -336,7 +362,6 @@ function fill() {
 
 // Tell the engine how hard to work: flat out when the listener is about to run
 // out of audio, otherwise with rests in between so the GPU stays cool.
-let lastPace = -1;
 function setPace() {
   const ahead = secsAhead() / settings.rate;
   const prof = PACE[settings.gpu] || PACE.gentle;
@@ -388,10 +413,17 @@ function endReached() {
 }
 el.addEventListener('waiting', () => {
   if (!tape || !playing) return;
-  if (document.hidden) away.stalls++;
+  if (document.hidden) { away.stalls++; logAway(`ran out of audio (${Math.round(secsAhead())} s saved ahead)`); }
   setStatus(ttsReady ? 'Generating…' : 'Loading voice engine…');
 });
 el.addEventListener('playing', () => updateInfo());
+// If Android pauses the audio by itself while the screen is off, note it and try to resume once.
+el.addEventListener('pause', () => {
+  if (!playing || !document.hidden || retired) return;
+  logAway('the phone paused the audio');
+  if (away.resumed++ < 2) el.play().then(() => logAway('resumed'), (e) => logAway('could not resume: ' + e.name));
+});
+el.addEventListener('error', () => { if (document.hidden) logAway('audio error: ' + (el.error && el.error.message)); });
 
 function playCurrent() {
   if (!book) return;
@@ -507,21 +539,33 @@ function finishPrepare() {
   if (done) setStatus(`Chapters ${done.from + 1} to ${done.to + 1} are saved. You can lock the phone.`);
 }
 // What happened while the screen was off / the app was in the background.
-const away = { since: 0, played: 0, made: 0, stalls: 0, wasPlaying: false };
+const away = { since: 0, played: 0, made: 0, stalls: 0, wasPlaying: false, events: [], resumed: 0 };
+function logAway(what) {
+  if (!away.since) return;
+  const s = Math.round((Date.now() - away.since) / 1000);
+  away.events.push(`${s < 90 ? s + ' s' : Math.round(s / 60) + ' min'}: ${what}`);
+  if (away.events.length > 30) away.events.shift();
+}
 document.addEventListener('visibilitychange', async () => {
   if (document.hidden) {
-    Object.assign(away, { since: Date.now(), played: 0, made: 0, stalls: 0, wasPlaying: playing, t0: el.currentTime });
+    Object.assign(away, { since: Date.now(), played: 0, made: 0, stalls: 0, wasPlaying: playing, t0: el.currentTime, events: [], resumed: 0 });
+    // Queue as much saved audio as possible straight into the player, so it can
+    // keep going for a long time even if Chrome barely runs our code.
+    if (tape && tape.active) { tape.aheadSecs = 40 * 60; tape.pump(); }
     return;
   }
+  if (tape) tape.aheadSecs = 240;
   if (prep && !wakeLock) { try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {} }
   const gone = (Date.now() - away.since) / 1000;
   if (tape && tape.active) away.played = Math.max(0, el.currentTime - away.t0);
   if (away.since && away.wasPlaying && gone > 20) {
     const m = (x) => (x < 90 ? `${Math.round(x)} s` : `${Math.round(x / 60)} min`);
     const msg = `While away (${m(gone)}): played ${m(away.played / settings.rate)}, made ${m(away.made)} of new audio` +
-      (away.stalls ? `, ran out ${away.stalls} time${away.stalls > 1 ? 's' : ''}` : ', never ran out');
+      (away.stalls ? `, ran out ${away.stalls} time${away.stalls > 1 ? 's' : ''}` : ', never ran out') +
+      (away.events.length ? '. Details in Settings.' : '');
     setStatus(msg);
-    store.set('lastAway', { at: Date.now(), msg });
+    store.set('lastAway', { at: Date.now(), msg, events: away.events.slice() });
+    showAwayLog();
     clearTimeout(updateInfo.t); infoT = Date.now() + 8000; // keep the message up for a few seconds
   }
   away.since = 0;
@@ -564,7 +608,7 @@ if ('mediaSession' in navigator) {
   const ms = navigator.mediaSession;
   const h = (a, f) => { try { ms.setActionHandler(a, f); } catch {} };
   h('play', play);
-  h('pause', pause);
+  h('pause', () => { if (document.hidden) logAway('pause from lock screen, headphones or the phone'); pause(); });
   h('stop', pause);
   h('previoustrack', () => skip(-1));
   h('nexttrack', () => skip(1));
@@ -839,6 +883,13 @@ gpuSel.onchange = () => { settings.gpu = gpuSel.value; store.set('gpu', settings
 const aheadSel = $('#ahead');
 aheadSel.value = String(settings.aheadMin);
 aheadSel.onchange = () => { settings.aheadMin = Number(aheadSel.value); store.set('aheadMin', settings.aheadMin); fill(); updateInfo(); };
+function showAwayLog() {
+  const r = store.get('lastAway', null);
+  const box = $('#away-log');
+  if (!r) { box.textContent = 'Nothing yet. After you come back from listening with the screen off, a short report appears here.'; return; }
+  box.textContent = [new Date(r.at).toLocaleString(), r.msg, ...(r.events || [])].join('\n');
+}
+showAwayLog();
 const modeSel = $('#mode');
 modeSel.value = store.get('mode', 'auto');
 modeSel.onchange = () => {
