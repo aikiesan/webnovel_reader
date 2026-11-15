@@ -26,7 +26,7 @@ const URGENT_SECS = 90;      // below this much listening time ready, the engine
 // 2.5 means the GPU works ~30% of the time; 0 means flat out.
 const PACE = { gentle: { relaxed: 2.5, prep: 1 }, balanced: { relaxed: 1, prep: 0.4 }, fast: { relaxed: 0, prep: 0 } };
 const MAX_INFLIGHT = 2;
-const CHUNK_VER = 2;       // bump when buildChunks() changes, so saved audio is regenerated
+const CHUNK_VER = 3;       // bump when buildChunks() changes, so saved audio is regenerated
 
 // ---------- settings ----------
 const store = {
@@ -39,7 +39,51 @@ const settings = {
   device: store.get('device', 'auto'),
   gpu: store.get('gpu', 'gentle'),
   aheadMin: store.get('aheadMin', 30), // keep this many minutes saved ahead while listening
+  // who reads what ('' = the narrator's voice)
+  dlgMode: store.get('dlgMode', 'gender'),   // same | one | gender
+  dlgVoice: store.get('dlgVoice', ''),       // dialogue voice (or unknown speaker in "gender" mode)
+  dlgMale: store.get('dlgMale', 'am_michael'),
+  dlgFemale: store.get('dlgFemale', 'af_bella'),
+  sysVoice: store.get('sysVoice', 'bm_george'), // [system messages]
+  narrSpeed: store.get('narrSpeed', 1.0),    // the model's own speaking pace (natural, unlike playback speed)
+  dlgSpeed: store.get('dlgSpeed', 1.05),
+  pauseScale: store.get('pauseScale', 1.0),
+  pron: store.get('pron', ''),               // "word = say as" lines
 };
+// Everything that changes the sound goes into the saved-audio key, so changing a
+// setting regenerates audio instead of mixing old and new.
+const VOICE_KEYS = ['voice', 'dlgMode', 'dlgVoice', 'dlgMale', 'dlgFemale', 'sysVoice', 'narrSpeed', 'dlgSpeed', 'pauseScale', 'pron'];
+function computeSig() {
+  const str = JSON.stringify(VOICE_KEYS.map((k) => settings[k]));
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return settings.voice + '~' + (h >>> 0).toString(36);
+}
+let vsig = computeSig();
+let pronRules = [];
+function parsePron() {
+  pronRules = settings.pron.split('\n').map((l) => l.split('=')).filter((x) => x.length === 2 && x[0].trim() && x[1].trim())
+    .map(([a, b]) => [new RegExp(`(^|[^\\p{L}])${a.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}])`, 'giu'), b.trim()]);
+}
+parsePron();
+const applyPron = (t) => pronRules.reduce((acc, [re, to]) => acc.replace(re, (m0, pre) => pre + to), t);
+// Turn a passage's segments into what the engine should say, in which voice and at what pace.
+function voicedSegs(segs) {
+  const out = [];
+  for (const sg of segs) {
+    let voice = settings.voice, speed = settings.narrSpeed;
+    if (sg.kind === 'd') {
+      speed = settings.dlgSpeed;
+      if (settings.dlgMode === 'one') voice = settings.dlgVoice || settings.voice;
+      else if (settings.dlgMode === 'gender') voice = (sg.spk === 'm' ? settings.dlgMale : sg.spk === 'f' ? settings.dlgFemale : settings.dlgVoice) || settings.voice;
+    } else if (sg.kind === 's') voice = settings.sysVoice || settings.voice;
+    const text = applyPron(sg.text);
+    const prev = out[out.length - 1];
+    if (prev && prev.voice === voice && prev.speed === speed) prev.text += ' ' + text; // same voice: one take, natural flow
+    else out.push({ text, voice, speed });
+  }
+  return out;
+}
 const aheadTarget = () => settings.aheadMin * 60 * settings.rate; // in audio seconds
 
 // ---------- IndexedDB ----------
@@ -129,32 +173,70 @@ function splitLong(s, max) {
   return out;
 }
 
-// One chunk never spans two paragraphs, so every paragraph (and every line
-// of dialogue) ends with a real pause. `pad` is the silence added after it, in ms.
+// A passage ("chunk") never spans two paragraphs, so every paragraph ends with
+// a real pause. Inside a paragraph the text is split into segments by who is
+// "speaking": n = narration, d = dialogue in quotes, s = [system messages].
+// Each segment can get its own voice and pace. `pad` is the silence after it, in ms.
 const PAUSE = { title: 800, para: 450, dialogue: 380, sentence: 140 };
-function buildChunks(chapter) {
-  const MAX = 260;
-  const chunks = [{ text: speakable(chapter.title).replace(/[.!?,]*$/, '.'), p0: -1, p1: -1, pad: PAUSE.title }];
-  chapter.paras.forEach((para, pi) => {
-    const t = speakable(para);
-    if (!hasWords(t)) return;
+const SAID = 'said|asked|replied|answered|shouted|yelled|screamed|whispered|muttered|murmured|cried|added|continued|snapped|laughed|sighed|called|exclaimed|growled|hissed|grunted|smiled|nodded|explained|admitted|declared|demanded|insisted|mumbled|roared|sneered|scoffed|chuckled|retorted|interrupted|began|stammered';
+const SAID_A = new RegExp(`\\b(he|she)\\s+(?:\\w+ly\\s+)?(?:${SAID})\\b`, 'i');
+const SAID_B = new RegExp(`\\b(?:${SAID})\\s+(he|she)\\b`, 'i');
+// Guess whether the dialogue in a paragraph is spoken by a man or a woman from
+// its narration ("he said", "she asked", or the first he/she). null = unknown.
+const MALE = /^(he|him|his|man|men|boy|guy|father|dad|son|brother|uncle|grandpa|grandfather|king|prince|emperor|lord|sir|mr|master|husband|monk|patriarch|young master)$/i;
+const GENDER_WORD = /\b(he|him|his|she|her|hers|man|men|woman|women|boy|girl|guy|lady|father|dad|mother|mom|mum|son|daughter|brother|sister|uncle|aunt|grandpa|grandfather|grandma|grandmother|king|queen|prince|princess|emperor|empress|lord|sir|madam|mr|mrs|miss|ms|master|mistress|husband|wife|monk|nun|patriarch|matriarch|young master|young miss|maid)\b/i;
+function guessSpeaker(narr) {
+  const m = narr.match(SAID_A) || narr.match(SAID_B) || narr.match(GENDER_WORD);
+  return m ? (MALE.test(m[1]) ? 'm' : 'f') : null;
+}
+function splitSegments(para) {
+  const segs = [];
+  const re = /“[^”]*”?|"[^"]*"?|\[[^\]]*\]?|【[^】]*】?/g;
+  let last = 0, m;
+  while ((m = re.exec(para))) {
+    if (m.index > last) segs.push({ kind: 'n', raw: para.slice(last, m.index) });
+    const c = m[0][0];
+    segs.push({ kind: c === '[' || c === '【' ? 's' : 'd', raw: m[0].replace(/^[“"\[【]|[”"\]】]$/g, '') });
+    last = m.index + m[0].length;
+  }
+  if (last < para.length) segs.push({ kind: 'n', raw: para.slice(last) });
+  const spk = guessSpeaker(segs.filter((x) => x.kind === 'n').map((x) => x.raw).join(' '));
+  return segs.map((x) => ({ ...x, spk: x.kind === 'd' ? spk : null }));
+}
+function paraChunks(para, MAX = 260) {
+  const pieces = [];
+  for (const seg of splitSegments(para)) {
+    const t = speakable(seg.raw);
+    if (!hasWords(t)) continue;
     const sentences = t.match(/[^.!?]+(?:[.!?]+["'”’)]*|$)\s*/g) || [t];
-    const pieces = [];
-    let cur = '';
-    for (let s of sentences) {
-      s = s.trim();
-      if (!s) continue;
-      for (const piece of splitLong(s, MAX)) {
-        if (cur && cur.length + piece.length + 1 > MAX) { pieces.push(cur); cur = ''; }
-        cur = cur ? cur + ' ' + piece : piece;
-      }
+    for (let sn of sentences) {
+      sn = sn.trim();
+      if (!sn) continue;
+      for (const piece of splitLong(sn, MAX)) pieces.push({ kind: seg.kind, spk: seg.spk, text: piece });
     }
-    if (cur) pieces.push(cur);
-    const isDialogue = /^["“'‘]/.test(t);
-    pieces.forEach((text, k) => {
-      if (!hasWords(text)) return;
-      const last = k === pieces.length - 1;
-      chunks.push({ text, p0: pi, p1: pi, pad: last ? (isDialogue ? PAUSE.dialogue : PAUSE.para) : PAUSE.sentence });
+  }
+  const out = [];
+  let cur = null;
+  for (const pc of pieces) {
+    if (cur && cur.len + pc.text.length + 1 > MAX) { out.push(cur); cur = null; }
+    if (!cur) cur = { segs: [], len: 0 };
+    const lastSeg = cur.segs[cur.segs.length - 1];
+    if (lastSeg && lastSeg.kind === pc.kind && lastSeg.spk === pc.spk) lastSeg.text += ' ' + pc.text;
+    else cur.segs.push({ kind: pc.kind, spk: pc.spk, text: pc.text });
+    cur.len += pc.text.length + 1;
+  }
+  if (cur) out.push(cur);
+  return out.map((c) => ({ segs: c.segs, text: c.segs.map((x) => x.text).join(' ') }));
+}
+function buildChunks(chapter) {
+  const title = speakable(chapter.title).replace(/[.!?,]*$/, '.');
+  const chunks = [{ segs: [{ kind: 'n', spk: null, text: title }], text: title, p0: -1, p1: -1, pad: PAUSE.title }];
+  chapter.paras.forEach((para, pi) => {
+    const pcs = paraChunks(para);
+    const isDialogue = /^\s*["“'‘]/.test(para);
+    pcs.forEach((c, k) => {
+      const last = k === pcs.length - 1;
+      chunks.push({ ...c, p0: pi, p1: pi, pad: last ? (isDialogue ? PAUSE.dialogue : PAUSE.para) : PAUSE.sentence });
     });
   });
   return chunks;
@@ -184,7 +266,7 @@ const chunksOf = (ch) => {
 };
 const chId = (ch) => { const c = book.chapters[ch]; return c.id != null ? String(c.id) : String(ch); };
 const SEP = '\u241E'; // separator that never appears in book/chapter ids
-const akey = (p, voice = settings.voice) => [book.id, voice, CHUNK_VER, chId(p.ch), p.i].join(SEP);
+const akey = (p, voice = vsig) => [book.id, voice, CHUNK_VER, chId(p.ch), p.i].join(SEP);
 const keyCh = (k) => k.split(SEP)[3];
 function step(p, dir = 1) {
   let { ch, i } = p;
@@ -292,8 +374,9 @@ const inWindow = (p) => bounds && cmp(p, bounds.lo) >= 0 && cmp(p, bounds.hi) <=
 function requestGen(p) {
   const k = akey(p);
   const id = ++reqId;
-  pending.set(id, { k, ch: p.ch, i: p.i, voice: settings.voice, bookId: book.id, t: Date.now() });
-  worker.postMessage({ type: 'gen', id, text: chunksOf(p.ch)[p.i].text, voice: settings.voice, pad: chunksOf(p.ch)[p.i].pad });
+  const c = chunksOf(p.ch)[p.i];
+  pending.set(id, { k, ch: p.ch, i: p.i, voice: vsig, bookId: book.id, t: Date.now() });
+  worker.postMessage({ type: 'gen', id, segs: voicedSegs(c.segs), pad: c.pad * settings.pauseScale, gap: 110 * settings.pauseScale });
 }
 
 function secsAhead() {
@@ -310,7 +393,7 @@ function fill() {
   const cur = akey(pos);
   for (const [k, v] of mem) {
     if (k === cur) continue;
-    if (!k.startsWith(book.id + SEP + settings.voice + SEP) || !inWindow(v)) {
+    if (!k.startsWith(book.id + SEP + vsig + SEP) || !inWindow(v)) {
       if (v.url && v.url !== curUrl) URL.revokeObjectURL(v.url);
       mem.delete(k);
     }
@@ -849,20 +932,49 @@ $('#next-ch').onclick = () => goChapter(pos.ch + 1);
 const voiceSel = $('#voice');
 for (const [id, name] of VOICES) { const o = document.createElement('option'); o.value = id; o.textContent = name; voiceSel.appendChild(o); }
 voiceSel.value = settings.voice;
-voiceSel.onchange = () => {
-  // The passage that's playing now finishes in the old voice; the next one uses the new voice.
-  settings.voice = voiceSel.value; store.set('voice', settings.voice);
+// Any change to how it sounds: the passage playing now finishes as it is; the next one uses the new settings.
+function voiceChanged(msg = 'The new voice starts after this passage.') {
+  vsig = computeSig();
   dropQueued();
   if (tape) tape.cutAfter(pos);
   fill();
   updateInfo();
-  setStatus('The new voice starts after this passage.');
-};
+  setStatus(msg);
+}
+voiceSel.onchange = () => { settings.voice = voiceSel.value; store.set('voice', settings.voice); voiceChanged(); };
+const PREVIEW = 'The caravan crept through the pass as night fell. "Stay behind me," he said, drawing his sword. "I can fight too," she replied, and her hands began to glow. [Quest accepted: Protect the caravan.]';
 $('#preview').onclick = () => {
   if (!ttsReady) return setStatus('Voice engine still loading…');
   const id = ++reqId; pending.set(id, { preview: true });
-  worker.postMessage({ type: 'gen', id, preview: true, voice: settings.voice, pad: 0, text: 'The ancient sword hummed in his hand. "So this is the power of the heavens," he whispered, as the sky split open above him.' });
+  const segs = paraChunks(PREVIEW, 1000).flatMap((c) => c.segs);
+  worker.postMessage({ type: 'gen', id, preview: true, segs: voicedSegs(segs), pad: 0, gap: 110 * settings.pauseScale });
 };
+// dialogue, system-message and pacing controls
+const voiceOpts = (sel, withSame) => {
+  if (withSame) { const o = document.createElement('option'); o.value = ''; o.textContent = 'Same as narrator'; sel.appendChild(o); }
+  for (const [id, name] of VOICES) { const o = document.createElement('option'); o.value = id; o.textContent = name; sel.appendChild(o); }
+};
+for (const [sel, key, same] of [['#dlg-voice', 'dlgVoice', true], ['#dlg-male', 'dlgMale', false], ['#dlg-female', 'dlgFemale', false], ['#sys-voice', 'sysVoice', true]]) {
+  const elx = $(sel); voiceOpts(elx, same); elx.value = settings[key];
+  elx.onchange = () => { settings[key] = elx.value; store.set(key, settings[key]); voiceChanged('New voices start after this passage.'); };
+}
+const dlgModeSel = $('#dlg-mode');
+const showDlg = () => {
+  $('#dlg-voice-row').classList.toggle('hidden', settings.dlgMode === 'same');
+  $('#dlg-voice-label').textContent = settings.dlgMode === 'gender' ? 'When the speaker is unclear' : 'Dialogue voice';
+  $('#dlg-gender-rows').classList.toggle('hidden', settings.dlgMode !== 'gender');
+};
+dlgModeSel.value = settings.dlgMode; showDlg();
+dlgModeSel.onchange = () => { settings.dlgMode = dlgModeSel.value; store.set('dlgMode', settings.dlgMode); showDlg(); voiceChanged('New voices start after this passage.'); };
+for (const [sel, key, fmt] of [['#narr-speed', 'narrSpeed', (v) => v.toFixed(2) + '×'], ['#dlg-speed', 'dlgSpeed', (v) => v.toFixed(2) + '×'], ['#pause-scale', 'pauseScale', (v) => v.toFixed(2) + '×']]) {
+  const elx = $(sel), lbl = $(sel + '-val');
+  elx.value = settings[key]; lbl.textContent = fmt(settings[key]);
+  elx.oninput = () => { lbl.textContent = fmt(Number(elx.value)); };
+  elx.onchange = () => { settings[key] = Number(elx.value); store.set(key, settings[key]); voiceChanged('The new pacing starts after this passage.'); };
+}
+const pronBox = $('#pron');
+pronBox.value = settings.pron;
+pronBox.onchange = () => { settings.pron = pronBox.value; store.set('pron', settings.pron); parsePron(); voiceChanged('New pronunciations start after this passage.'); };
 const rateSel = $('#rate');
 const rateLbl = $('#rate-val');
 const showRate = () => { rateLbl.textContent = settings.rate.toFixed(2) + '×'; $('#speed-btn').textContent = settings.rate.toFixed(2).replace(/0$/, '') + '×'; };
@@ -1040,4 +1152,4 @@ async function decodeHashPayload(s) {
 })();
 
 // expose for debugging/tests
-window.__app = { get pos() { return pos; }, get playing() { return playing; }, mem, stored, pending, chunksOf, get book() { return book; }, get prep() { return prep; }, akey, speakable };
+window.__app = { get pos() { return pos; }, get playing() { return playing; }, mem, stored, pending, chunksOf, get book() { return book; }, get prep() { return prep; }, akey, speakable, paraChunks, voicedSegs, settings };

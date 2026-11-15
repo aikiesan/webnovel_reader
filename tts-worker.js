@@ -165,18 +165,29 @@ async function pump() {
     if (!job) break;
     const t0 = performance.now();
     try {
-      let samples, rate;
-      if (mock) {
-        rate = 24000;
-        const secs = Math.max(0.3, job.text.length / 60);
-        samples = new Float32Array(Math.round(rate * secs));
-        for (let i = 0; i < samples.length; i++) samples[i] = 0.05 * Math.sin(i / 20);
-        await sleep(30);
-      } else {
-        const out = await tts.generate(job.text, { voice: job.voice, speed: 1 });
-        samples = out.audio; rate = out.sampling_rate;
+      // A passage may hold several segments (narration, dialogue, system text),
+      // each in its own voice and pace. Generate each, trim it, and join them
+      // with a short gap; then add the passage's own pause at the end.
+      const segs = job.segs || [{ text: job.text, voice: job.voice, speed: 1 }];
+      const parts = [];
+      let rate = 24000;
+      for (const sg of segs) {
+        let samples;
+        if (mock) {
+          samples = new Float32Array(Math.round(rate * Math.max(0.3, sg.text.length / 60 / (sg.speed || 1))));
+          for (let i = 0; i < samples.length; i++) samples[i] = 0.05 * Math.sin(i / 20);
+          await sleep(15);
+        } else {
+          const out = await tts.generate(sg.text, { voice: sg.voice, speed: sg.speed || 1 });
+          samples = out.audio; rate = out.sampling_rate;
+        }
+        parts.push(shape(samples, rate, 0));
       }
-      samples = shape(samples, rate, job.pad);
+      const gap = Math.round(rate * (job.gap || 0) / 1000);
+      const pad = Math.round(rate * (job.pad || 0) / 1000);
+      let samples = new Float32Array(parts.reduce((a, x) => a + x.length, 0) + gap * (parts.length - 1) + pad);
+      let o = 0;
+      parts.forEach((x, i) => { samples.set(x, o); o += x.length + (i < parts.length - 1 ? gap : 0); });
       const blob = await encode(samples, rate);
       const ms = performance.now() - t0;
       restUntil = Date.now() + ms * pace;
