@@ -1,9 +1,13 @@
 // Runs Kokoro TTS off the main thread. Requests are processed one at a time.
+// Each passage is returned as compressed Ogg/Opus (~24 kbps, ≈11 MB per hour)
+// so the app can store hours of audio on the phone for background playback.
 let tts = null;
 let mock = false;
 const queue = [];
 let busy = false;
+let holdUntil = 0; // main thread asks us to pause briefly while the user is touching the UI
 
+// ---------- WAV (fallback when WebCodecs Opus is unavailable) ----------
 function toWav(samples, rate) {
   const buf = new ArrayBuffer(44 + samples.length * 2);
   const v = new DataView(buf);
@@ -19,6 +23,85 @@ function toWav(samples, rate) {
   return buf;
 }
 
+// ---------- Ogg/Opus muxer ----------
+const CRC = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) { let r = i << 24; for (let k = 0; k < 8; k++) r = r & 0x80000000 ? (r << 1) ^ 0x04c11db7 : r << 1; t[i] = r >>> 0; }
+  return t;
+})();
+function oggPage(packets, granule, serial, seq, flags) {
+  const lacing = [];
+  for (const p of packets) { let n = p.length; while (n >= 255) { lacing.push(255); n -= 255; } lacing.push(n); }
+  const body = packets.reduce((a, p) => a + p.length, 0);
+  const page = new Uint8Array(27 + lacing.length + body);
+  const v = new DataView(page.buffer);
+  page.set([0x4f, 0x67, 0x67, 0x53]); // "OggS"
+  page[5] = flags;
+  v.setUint32(6, granule % 0x100000000, true); v.setUint32(10, Math.floor(granule / 0x100000000), true);
+  v.setUint32(14, serial, true); v.setUint32(18, seq, true);
+  page[26] = lacing.length; page.set(lacing, 27);
+  let o = 27 + lacing.length;
+  for (const p of packets) { page.set(p, o); o += p.length; }
+  let c = 0;
+  for (let i = 0; i < page.length; i++) c = ((c << 8) ^ CRC[((c >>> 24) ^ page[i]) & 0xff]) >>> 0;
+  v.setUint32(22, c, true);
+  return page;
+}
+const PRESKIP = 312;
+function muxOggOpus(packets, rate) {
+  const serial = (Math.random() * 0xffffffff) >>> 0;
+  const head = new Uint8Array(19); const hv = new DataView(head.buffer);
+  head.set([...'OpusHead'].map((c) => c.charCodeAt(0))); head[8] = 1; head[9] = 1;
+  hv.setUint16(10, PRESKIP, true); hv.setUint32(12, rate, true);
+  const vendor = 'novel-reader';
+  const tags = new Uint8Array(8 + 4 + vendor.length + 4); const tv = new DataView(tags.buffer);
+  tags.set([...'OpusTags'].map((c) => c.charCodeAt(0))); tv.setUint32(8, vendor.length, true);
+  tags.set([...vendor].map((c) => c.charCodeAt(0)), 12);
+  const pages = [oggPage([head], 0, serial, 0, 2), oggPage([tags], 0, serial, 1, 0)];
+  let seq = 2, granule = PRESKIP, cur = [], segs = 0;
+  for (let i = 0; i < packets.length; i++) {
+    const p = packets[i];
+    const need = Math.floor(p.data.length / 255) + 1;
+    if (segs + need > 255 || cur.length >= 50) { pages.push(oggPage(cur, granule, serial, seq++, 0)); cur = []; segs = 0; }
+    cur.push(p.data); segs += need; granule += p.samples48;
+  }
+  pages.push(oggPage(cur, granule, serial, seq, 4));
+  return new Blob(pages, { type: 'audio/ogg; codecs=opus' });
+}
+let opusOk = null;
+async function canOpus(rate) {
+  if (opusOk === null) {
+    try { opusOk = typeof AudioEncoder !== 'undefined' && (await AudioEncoder.isConfigSupported({ codec: 'opus', sampleRate: rate, numberOfChannels: 1, bitrate: 24000 })).supported; }
+    catch { opusOk = false; }
+  }
+  return opusOk;
+}
+async function encodeOpus(samples, rate) {
+  const packets = [];
+  let err = null;
+  const enc = new AudioEncoder({
+    output: (chunk) => { const d = new Uint8Array(chunk.byteLength); chunk.copyTo(d); packets.push({ data: d, samples48: Math.round((chunk.duration || 20000) * 48 / 1000) }); },
+    error: (e) => { err = e; },
+  });
+  enc.configure({ codec: 'opus', sampleRate: rate, numberOfChannels: 1, bitrate: 24000, opus: { application: 'voip', frameDuration: 20000 } });
+  // pad the end so the encoder's look-ahead doesn't clip the last syllable
+  const padded = new Float32Array(samples.length + Math.round(rate * 0.04));
+  padded.set(samples);
+  enc.encode(new AudioData({ format: 'f32', sampleRate: rate, numberOfFrames: padded.length, numberOfChannels: 1, timestamp: 0, data: padded }));
+  await enc.flush();
+  enc.close();
+  if (err || !packets.length) throw err || new Error('no opus output');
+  return muxOggOpus(packets, rate);
+}
+
+async function encode(samples, rate) {
+  if (await canOpus(rate)) {
+    try { return await encodeOpus(samples, rate); } catch (e) { opusOk = false; postMessage({ type: 'log', msg: 'Opus encode failed, using WAV: ' + e }); }
+  }
+  return new Blob([toWav(samples, rate)], { type: 'audio/wav' });
+}
+
+// ---------- model ----------
 async function load({ device, isMock }) {
   if (isMock) {
     mock = true;
@@ -42,8 +125,7 @@ async function load({ device, isMock }) {
   if (useGpu) {
     try {
       tts = await KokoroTTS.from_pretrained(model, { dtype: 'fp32', device: 'webgpu', progress_callback });
-      // warm-up so the first real sentence is fast
-      await tts.generate('Ready.', { voice: 'af_heart' });
+      await tts.generate('Ready.', { voice: 'af_heart' }); // warm-up so the first real sentence is fast
       postMessage({ type: 'ready', device: 'webgpu' });
       return;
     } catch (e) {
@@ -54,26 +136,46 @@ async function load({ device, isMock }) {
   postMessage({ type: 'ready', device: 'wasm' });
 }
 
+// Trim Kokoro's own leading/trailing near-silence, then add our own pause so
+// the gaps between passages are consistent (short after a sentence, longer
+// after a paragraph).
+function shape(samples, rate, padMs) {
+  const th = 0.004;
+  let a = 0, b = samples.length - 1;
+  while (a < b && Math.abs(samples[a]) < th) a++;
+  while (b > a && Math.abs(samples[b]) < th) b--;
+  a = Math.max(0, a - Math.round(rate * 0.03));
+  b = Math.min(samples.length - 1, b + Math.round(rate * 0.06));
+  const pad = Math.round(rate * (padMs || 0) / 1000);
+  const out = new Float32Array(b - a + 1 + pad);
+  out.set(samples.subarray(a, b + 1));
+  return out;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function pump() {
   if (busy) return;
   busy = true;
   while (queue.length) {
+    while (Date.now() < holdUntil) await sleep(Math.min(250, holdUntil - Date.now()));
     const job = queue.shift();
+    if (!job) break;
     const t0 = performance.now();
     try {
-      let wav;
+      let samples, rate;
       if (mock) {
-        const rate = 24000;
-        const secs = Math.max(0.3, job.text.length / 400);
-        const s = new Float32Array(Math.round(rate * secs));
-        for (let i = 0; i < s.length; i++) s[i] = 0.05 * Math.sin(i / 20);
-        await new Promise((r) => setTimeout(r, 30));
-        wav = toWav(s, rate);
+        rate = 24000;
+        const secs = Math.max(0.3, job.text.length / 60);
+        samples = new Float32Array(Math.round(rate * secs));
+        for (let i = 0; i < samples.length; i++) samples[i] = 0.05 * Math.sin(i / 20);
+        await sleep(30);
       } else {
         const out = await tts.generate(job.text, { voice: job.voice, speed: 1 });
-        wav = toWav(out.audio, out.sampling_rate);
+        samples = out.audio; rate = out.sampling_rate;
       }
-      postMessage({ type: 'audio', id: job.id, wav, ms: performance.now() - t0 }, [wav]);
+      samples = shape(samples, rate, job.pad);
+      const blob = await encode(samples, rate);
+      postMessage({ type: 'audio', id: job.id, blob, dur: samples.length / rate, ms: performance.now() - t0 });
     } catch (e) {
       postMessage({ type: 'error', id: job.id, msg: String(e) });
     }
@@ -89,6 +191,11 @@ onmessage = async (e) => {
     queue.push(m);
     pump();
   } else if (m.type === 'clear') {
-    queue.length = 0;
+    const keep = queue.filter((j) => j.preview);
+    const ids = queue.filter((j) => !j.preview).map((j) => j.id);
+    queue.length = 0; queue.push(...keep);
+    postMessage({ type: 'dropped', ids });
+  } else if (m.type === 'hold') {
+    holdUntil = Math.max(holdUntil, Date.now() + m.ms);
   }
 };

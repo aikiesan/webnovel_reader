@@ -176,24 +176,58 @@ try {
     const appOrigin = new URL(APP).origin;
 
     const floatBtn = h('button', btnCss('#1fae5b') + ';padding:14px 0', '🎧 Play here (floating player)');
-    const tabBtn = h('button', btnCss('#444a55') + ';padding:14px 0', '↗ Open in Reader tab');
-    actions.append(floatBtn, tabBtn);
+    // A real link (not window.open) so pop-up blockers leave it alone. The chapters
+    // travel inside the link itself (#import=…, compressed); the part after # is
+    // never sent to any server.
+    const tabLink = h('a', btnCss('#444a55') + ';padding:14px 0;display:block;text-align:center;text-decoration:none;box-sizing:border-box', '↗ Open in Reader tab');
+    tabLink.target = '_blank';
+    tabLink.rel = 'opener';
+    tabLink.href = APP + '?import=1';
+    actions.append(floatBtn, tabLink);
+    (async () => {
+      try {
+        const bytes = new TextEncoder().encode(JSON.stringify(payload));
+        const gz = new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
+        let bin = '';
+        for (let i = 0; i < gz.length; i += 0x8000) bin += String.fromCharCode.apply(null, gz.subarray(i, i + 0x8000));
+        const b64 = btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        if (b64.length < 1800000) tabLink.href = APP + '#import=' + b64;
+        else log('Too many chapters for the link; the Reader tab will ask this page for them instead.');
+      } catch (e) { log('Could not pack chapters into the link: ' + e.message); }
+    })();
+    tabLink.addEventListener('click', (e) => {
+      e.stopPropagation(); // keep the site's own click handlers (ads) out of it
+      if (!tabLink.href.includes('#import=')) {
+        // fallback: the new tab asks us for the chapters with postMessage
+        window.addEventListener('message', (ev) => {
+          if (ev.origin !== appOrigin || !ev.data || ev.data.type !== 'wn-ready' || !ev.source) return;
+          ev.source.postMessage(payload, appOrigin);
+        });
+      }
+      msg('Opening the Reader… You can close this panel.');
+    }, true);
 
     floatBtn.onclick = () => {
       document.getElementById('__rd_float')?.remove();
-      const wrap = h('div', 'all:initial;position:fixed;z-index:2147483647;left:6px;right:6px;bottom:6px;height:170px;border-radius:16px;overflow:hidden;box-shadow:0 8px 30px #000a;background:#16181d;display:block;transition:height .2s');
+      const SMALL = 206, BAR = 40;
+      const wrap = h('div', `all:initial;position:fixed;z-index:2147483647;left:6px;right:6px;bottom:6px;height:${SMALL}px;border-radius:16px;overflow:hidden;box-shadow:0 8px 30px #000a;background:#16181d;display:flex;flex-direction:column;transition:height .2s;font:14px system-ui,sans-serif`);
       wrap.id = '__rd_float';
-      const bar = h('div', 'position:absolute;top:4px;right:6px;z-index:2;display:flex;gap:4px');
-      const eBtn = h('button', 'width:34px;height:34px;border-radius:50%;border:0;background:#0007;color:#fff;font-size:16px', '⤢');
-      const cBtn = h('button', 'width:34px;height:34px;border-radius:50%;border:0;background:#0007;color:#fff;font-size:16px', '✕');
-      bar.append(eBtn, cBtn);
-      const fr = h('iframe', 'border:0;width:100%;height:100%;display:block');
+      // the player's own controls live in their own strip, never on top of the app
+      const bar = h('div', `flex:none;height:${BAR}px;display:flex;align-items:center;gap:6px;padding:0 6px 0 14px;background:#0d0f12;color:#9aa0aa;font:600 13px system-ui,sans-serif`);
+      const label = h('div', 'flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis', '🎧 Reader');
+      const ctl = 'width:34px;height:30px;border-radius:8px;border:0;background:#22262d;color:#fff;font:16px system-ui,sans-serif;padding:0;margin:0';
+      const eBtn = h('button', ctl, '▲');
+      eBtn.title = 'Bigger / smaller';
+      const cBtn = h('button', ctl, '✕');
+      cBtn.title = 'Close player';
+      bar.append(label, eBtn, cBtn);
+      const fr = h('iframe', 'border:0;width:100%;flex:1;display:block;min-height:0');
       fr.src = APP + '?import=1&embed=1';
-      fr.allow = 'autoplay; clipboard-write';
-      wrap.append(fr, bar);
+      fr.allow = 'autoplay; clipboard-write; screen-wake-lock';
+      wrap.append(bar, fr);
       (document.body || document.documentElement).appendChild(wrap);
       let big = false;
-      eBtn.onclick = () => { big = !big; wrap.style.height = big ? '75vh' : '170px'; };
+      eBtn.onclick = () => { big = !big; wrap.style.height = big ? '78vh' : SMALL + 'px'; eBtn.textContent = big ? '▼' : '▲'; };
       cBtn.onclick = () => { if (confirm('Stop listening and close the player?')) wrap.remove(); };
       let ok = false;
       window.addEventListener('message', (e) => {
@@ -208,16 +242,6 @@ try {
         msg('This site blocked the floating player 😕 Use "Open in Reader tab" instead.');
         wrap.remove();
       }, 15000);
-    };
-
-    tabBtn.onclick = () => {
-      const w = window.open(APP + '?import=1', '_blank');
-      if (!w) { msg('Popup blocked — allow popups for this site and tap again.'); return; }
-      window.addEventListener('message', (e) => {
-        if (e.origin !== appOrigin || !e.data || e.data.type !== 'wn-ready') return;
-        w.postMessage(payload, appOrigin);
-      });
-      msg('Sent! You can close this panel.');
     };
   }
 } catch (e) {

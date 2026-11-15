@@ -1,13 +1,18 @@
-# Feedback from first real test (Galaxy S25+, Chrome) — to fix next
+# Feedback from first real test (Galaxy S25+, Chrome)
 
 What works: grabbing 10 chapters on novelping with the SHORT bookmarklet; floating player plays; voice quality is very good.
 
-## Problems reported
-1. **UI is laggy.** Suspects: Kokoro on WebGPU competing with page rendering; smooth-scroll highlight on every passage; `fill()` running on every message; the iframe sitting on top of a heavy page.
-2. **Changing voice mid-reading nearly froze or broke playback.** Suspects: in-flight GPU job can't be cancelled; `resetAudio()` plus the silent-loop path; possible duplicate requests after epoch bump. Make voice switching cheap: finish the current passage, then switch.
-3. **Floating player layout is cramped.** The ⤢/✕ buttons overlap the header icons (📚 ☰ ⚙) when expanded. Redesign the embed layout and give the overlay controls their own space.
-4. **Cadence could be better.** Ideas: add real pauses between paragraphs and after dialogue lines; split chunks at sentence boundaries more naturally; try Kokoro's own `speed` instead of `playbackRate` for >1×; normalise "...", "—", system-window brackets.
-5. **"Open in Reader tab" blocked by popup blocker.** Options: use a real `<a target=_blank>` link (more often allowed), tell the user to allow pop-ups for the site, or drop this path and rely on the floating player.
-6. webnovel.com: SHORT bookmarklet is blocked by the site's CSP (expected). FULL single-line version is not tested on the real site yet.
-7. **Menus and settings are laggy when tapped** (not only during scrolling).
-8. **Playback stops when Chrome is minimized. Top priority.** The text is already grabbed ahead; the audio is not. Chrome pauses the voice engine (GPU work) in the background, so the audio buffer runs dry. Plan: a "Prepare" step that generates the audio for the next N chapters ahead while the screen is on and saves it compressed in phone storage (WebCodecs Opus, ~10 MB/hour). Background playback then only plays saved files, with no generation needed. Show progress like "3 chapters ready (≈45 min)". Also check whether audio inside the floating player's frame is paused in the background; a full reader tab may behave better.
+## Status after fix round 1 (needs re-test on the phone)
+1. UI lag: **mitigated.** The voice engine now pauses for ~1.5 s whenever you touch or scroll (only if enough audio is ready). While just listening it stops generating once ~10 min is ready, so the GPU rests. Scrolling only moves when the highlight leaves the middle of the screen. Panels open before their lists are built.
+2. Voice change mid-reading: **fixed.** The current passage finishes in the old voice and the next one uses the new voice. Playback is no longer reset, and the playing audio is no longer freed while it is still playing.
+3. Floating player layout: **fixed.** ▲/✕ now sit in their own strip above the player, not on top of the app.
+4. Cadence: **improved.** A passage never spans two paragraphs. Pauses: title 0.8 s, paragraph 0.45 s, dialogue 0.38 s, mid-paragraph 0.14 s. Kokoro's own silence is trimmed so gaps are consistent. Normalised: dashes → pause, "!!!" → "!", "AAAAAH" → "Aaah", SHOUTING is no longer spelled out letter by letter, "Lv." → "Level", "x2" → "times 2".
+5. "Open in Reader tab" pop-up blocked: **fixed.** It is now a real link that carries the chapters inside the address (#import=…, gzip). Nothing is sent to a server.
+6. webnovel.com FULL bookmarklet: still untested on the real site.
+7. Menus laggy: see 1.
+8. Background playback: **implemented.** Every generated passage is saved on the phone as Ogg/Opus (~20 kbps ≈ 9 MB/hour, IndexedDB). The ⬇ button prepares This chapter / Next 3 / 5 / 10 while the screen is on (keeps it awake) and shows progress. Background playback then only plays saved files. Audio for chapters more than one behind is deleted automatically.
+
+## To check on the phone
+- Prepare 3 chapters, lock the phone: does it play through all 3?
+- Same test inside the floating player (iframe) vs the Reader tab.
+- Is the lag acceptable now while it generates?

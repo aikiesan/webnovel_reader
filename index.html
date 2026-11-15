@@ -19,6 +19,7 @@
     <div id="book-title">Novel Reader</div>
     <div class="sub"><span id="chapter-num"></span> <span id="chapter-title"></span></div>
   </div>
+  <button id="btn-offline" class="icon" aria-label="Prepare for offline / background listening">⬇</button>
   <button id="btn-chapters" class="icon" aria-label="Chapters">☰</button>
   <button id="btn-settings" class="icon" aria-label="Settings">⚙</button>
 </header>
@@ -81,6 +82,25 @@
     <form id="chapter-go"><input id="chapter-filter" type="search" placeholder="Search, or type a number + Enter" autocomplete="off"></form>
     <a id="more-chapters" class="btn hidden" target="_blank" rel="noopener">Get more chapters on webnovel →</a>
     <ul id="chapter-list" class="list chapters"></ul>
+  </div>
+</section>
+
+<section id="offline" class="panel" aria-label="Listen in the background">
+  <div class="panel-hd"><h3>Listen with the screen off</h3><button class="close icon" aria-label="Close">✕</button></div>
+  <div class="panel-bd">
+    <p>Chrome pauses the voice engine when the app is in the background or the screen is off. To keep listening, <b>prepare</b> chapters first: the voice is generated now, while the screen is on, and saved on your phone (about 10 MB per hour). After that, playback in the background just plays the saved files.</p>
+    <p id="off-ready" class="ready"></p>
+    <div id="off-prog" class="prog hidden"><div id="off-bar"></div></div>
+    <div class="prep-btns">
+      <button class="btn" data-prep="1">This chapter</button>
+      <button class="btn" data-prep="3">Next 3</button>
+      <button class="btn" data-prep="5">Next 5</button>
+      <button class="btn" data-prep="10">Next 10</button>
+    </div>
+    <button id="off-stop" class="btn ghost hidden">Stop preparing</button>
+    <p class="muted">Keep this app open with the screen on while it prepares (it keeps the screen awake for you). You can keep listening at the same time. Saved audio is for the current voice; changing voice means preparing again. Finished chapters are cleaned up automatically.</p>
+    <p id="off-storage" class="muted"></p>
+    <button id="off-clear" class="btn ghost">Delete saved audio for this book</button>
   </div>
 </section>
 
