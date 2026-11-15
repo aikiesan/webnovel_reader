@@ -250,7 +250,7 @@ function playCurrent() {
 
 function next() {
   const n = step(pos);
-  if (!n) { playing = false; el.pause(); updatePlayBtn(); setStatus(book.id.startsWith('wn:') ? 'End of grabbed chapters. ☰ → "Get more chapters"' : 'End of book 🎉'); return; }
+  if (!n) { playing = false; el.pause(); updatePlayBtn(); setStatus(book.source ? 'End of grabbed chapters. ☰ → "Get more chapters"' : 'End of book 🎉'); return; }
   const chapterChanged = n.ch !== pos.ch;
   pos = n;
   if (chapterChanged) renderChapter();
@@ -503,7 +503,7 @@ async function buildBookmarklet() {
   const code = src.replace(/^\s*\/\*[\s\S]*?\*\/\s*/, '').replace('__APP_URL__', APP_URL);
   return 'javascript:' + encodeURIComponent(code);
 }
-const shortBookmarklet = () => `javascript:(function(){var s=document.createElement('script');s.charset='utf-8';s.src='${APP_URL}grab.js?'+Date.now();document.body.appendChild(s)})()`;
+const shortBookmarklet = () => `javascript:(function(){var s=document.createElement('script');s.charset='utf-8';s.onerror=function(){alert('Site blocked the SHORT bookmarklet. Use the FULL one.')};s.src='${APP_URL}grab.js?'+Date.now();document.documentElement.appendChild(s)})()`;
 $('#bm-card').addEventListener('toggle', async (e) => {
   if (e.target.open && !$('#bm-code').value) $('#bm-code').value = await buildBookmarklet();
   if (e.target.open) $('#bm-short').value = shortBookmarklet();
@@ -523,9 +523,11 @@ $('#copy-bm').onclick = async () => {
 function updateMoreLink() {
   const a = $('#more-chapters');
   const m = book && book.id.match(/^wn:(\d+)$/);
-  if (!m) { a.classList.add('hidden'); return; }
-  const last = book.chapters[book.chapters.length - 1];
-  a.href = `https://www.webnovel.com/book/${m[1]}/${last.id}`;
+  const last = book && book.chapters[book.chapters.length - 1];
+  if (m) a.href = `https://www.webnovel.com/book/${m[1]}/${last.id}`;
+  else if (last && /^https?:/.test(String(last.id))) a.href = last.id;
+  else { a.classList.add('hidden'); return; }
+  a.textContent = 'Get more chapters (opens the last chapter, then run the bookmarklet) →';
   a.classList.remove('hidden');
 }
 
