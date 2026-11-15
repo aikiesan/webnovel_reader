@@ -16,19 +16,21 @@ try {
 
   // ---------- tiny DOM builder (no innerHTML: works on strict sites) ----------
   const h = (tag, css, text) => { const e = document.createElement(tag); if (css) e.style.cssText = css; if (text != null) e.textContent = text; return e; };
-  const btnCss = (bg) => `flex:1;min-width:52px;padding:12px 0;border-radius:10px;border:0;background:${bg};color:#fff;font:600 16px system-ui,sans-serif;margin:0`;
+  const btnCss = (bg, fg) => `flex:1;min-width:52px;padding:12px 0;border-radius:999px;border:0;background:${bg};color:${fg || '#0f0a06'};font:600 16px system-ui,sans-serif;margin:0;cursor:pointer`;
+  const ACC = '#e89f92', INK = '#efe7d8', MUTED = '#9d9388', P1 = '#0f0a06', P3 = '#271d17';
 
-  const box = h('div', 'all:initial;position:fixed;z-index:2147483647;left:8px;right:8px;bottom:8px;background:#16181d;color:#eee;font:15px/1.4 system-ui,sans-serif;padding:14px;border-radius:14px;box-shadow:0 8px 30px #0008;max-height:65vh;overflow:auto;display:block;box-sizing:border-box');
+  const box = h('div', 'all:initial;position:fixed;z-index:2147483647;left:8px;right:8px;bottom:8px;background:#19120e;color:#efe7d8;font:15px/1.45 system-ui,sans-serif;padding:14px;border-radius:14px;box-shadow:0 8px 30px #0008;max-height:65vh;overflow:auto;display:block;box-sizing:border-box');
   box.id = '__rd_box';
   const top = h('div', 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px');
-  top.append(h('b', 'font:700 16px system-ui,sans-serif;color:#fff', '🎧 Send to Reader'));
-  const xBtn = h('button', 'background:none;border:0;color:#aaa;font-size:22px;padding:0 4px', '✕');
+  top.append(h('b', 'font:400 18px Georgia,serif;color:' + INK, 'Send to Reader'));
+  const xBtn = h('button', 'background:none;border:0;color:' + MUTED + ';font-size:22px;padding:0 6px;cursor:pointer', '×');
+  xBtn.setAttribute('aria-label', 'Close');
   top.append(xBtn);
-  const msgEl = h('div', 'margin-bottom:10px;color:#eee', 'How many chapters from here?');
+  const msgEl = h('div', 'margin-bottom:10px;color:' + INK, 'How many chapters from here?');
   const btns = h('div', 'display:flex;gap:8px;flex-wrap:wrap');
-  for (const n of [1, 10, 25, 50, 100]) { const b = h('button', btnCss('#2b6cff'), String(n)); b.onclick = () => grab(n).catch((e) => { msg('Error: ' + e.message); alert('Reader error: ' + e.message); }); btns.append(b); }
+  for (const n of [1, 10, 25, 50, 100]) { const b = h('button', btnCss(P3, INK), String(n)); b.onclick = () => grab(n).catch((e) => { msg('Error: ' + e.message); alert('Reader error: ' + e.message); }); btns.append(b); }
   const actions = h('div', 'display:flex;flex-direction:column;gap:6px');
-  const logEl = h('pre', 'white-space:pre-wrap;font:11px/1.4 monospace;color:#999;margin:8px 0 0;max-height:130px;overflow:auto');
+  const logEl = h('pre', 'white-space:pre-wrap;font:11px/1.4 monospace;color:' + MUTED + ';margin:8px 0 0;max-height:130px;overflow:auto');
   box.append(top, msgEl, btns, actions, logEl);
   (document.body || document.documentElement).appendChild(box);
   const msg = (t) => { msgEl.textContent = t; };
@@ -160,7 +162,7 @@ try {
         await sleep(400);
       }
     }
-    if (!chapters.length) { msg('Could not find chapter text on this page 😕 Send a screenshot of this panel.'); return; }
+    if (!chapters.length) { msg('Could not find chapter text on this page. Send a screenshot of this panel.'); return; }
 
     if (!bookName) {
       const t = (document.title || '').split(/\s*[|–—-]\s*|\s+chapter\s*\d+/i)[0].trim();
@@ -175,11 +177,11 @@ try {
     msg(`Got ${chapters.length} chapter(s). How do you want to listen?`);
     const appOrigin = new URL(APP).origin;
 
-    const floatBtn = h('button', btnCss('#1fae5b') + ';padding:14px 0', '🎧 Play here (floating player)');
+    const floatBtn = h('button', btnCss(ACC) + ';padding:14px 0', 'Play here in a floating player');
     // A real link (not window.open) so pop-up blockers leave it alone. The chapters
     // travel inside the link itself (#import=…, compressed); the part after # is
     // never sent to any server.
-    const tabLink = h('a', btnCss('#444a55') + ';padding:14px 0;display:block;text-align:center;text-decoration:none;box-sizing:border-box', '↗ Open in Reader tab');
+    const tabLink = h('a', btnCss('transparent', INK) + ';box-shadow:inset 0 0 0 1.5px ' + INK + ';padding:14px 0;display:block;text-align:center;text-decoration:none;box-sizing:border-box', 'Open in the Reader tab');
     tabLink.target = '_blank';
     tabLink.rel = 'opener';
     tabLink.href = APP + '?import=1';
@@ -210,15 +212,15 @@ try {
     floatBtn.onclick = () => {
       document.getElementById('__rd_float')?.remove();
       const SMALL = 206, BAR = 40;
-      const wrap = h('div', `all:initial;position:fixed;z-index:2147483647;left:6px;right:6px;bottom:6px;height:${SMALL}px;border-radius:16px;overflow:hidden;box-shadow:0 8px 30px #000a;background:#16181d;display:flex;flex-direction:column;transition:height .2s;font:14px system-ui,sans-serif`);
+      const wrap = h('div', `all:initial;position:fixed;z-index:2147483647;left:6px;right:6px;bottom:6px;height:${SMALL}px;border-radius:16px;overflow:hidden;box-shadow:0 8px 30px #000a;background:#19120e;display:flex;flex-direction:column;transition:height .2s;font:14px system-ui,sans-serif`);
       wrap.id = '__rd_float';
       // the player's own controls live in their own strip, never on top of the app
-      const bar = h('div', `flex:none;height:${BAR}px;display:flex;align-items:center;gap:6px;padding:0 6px 0 14px;background:#0d0f12;color:#9aa0aa;font:600 13px system-ui,sans-serif`);
-      const label = h('div', 'flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis', '🎧 Reader');
-      const ctl = 'width:34px;height:30px;border-radius:8px;border:0;background:#22262d;color:#fff;font:16px system-ui,sans-serif;padding:0;margin:0';
+      const bar = h('div', `flex:none;height:${BAR}px;display:flex;align-items:center;gap:6px;padding:0 6px 0 14px;background:#0f0a06;color:#9d9388;font:500 13px system-ui,sans-serif`);
+      const label = h('div', 'flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis', 'Reader');
+      const ctl = 'width:40px;height:30px;border-radius:999px;border:0;background:#271d17;color:#efe7d8;font:15px system-ui,sans-serif;padding:0;margin:0;cursor:pointer';
       const eBtn = h('button', ctl, '▲');
       eBtn.title = 'Bigger / smaller';
-      const cBtn = h('button', ctl, '✕');
+      const cBtn = h('button', ctl, '×');
       cBtn.title = 'Close player';
       bar.append(label, eBtn, cBtn);
       const fr = h('iframe', 'border:0;width:100%;flex:1;display:block;min-height:0');
@@ -239,7 +241,7 @@ try {
       setTimeout(() => {
         if (ok) return;
         box.style.display = '';
-        msg('This site blocked the floating player 😕 Use "Open in Reader tab" instead.');
+        msg('This site blocked the floating player. Use "Open in the Reader tab" instead.');
         wrap.remove();
       }, 15000);
     };

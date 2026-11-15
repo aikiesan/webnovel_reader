@@ -3,124 +3,157 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#111317">
+<meta name="description" content="Listen to web novels with natural voices that run on your phone.">
+<meta name="theme-color" content="#0f0a06" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f1eadc" media="(prefers-color-scheme: light)">
 <title>Novel Reader</title>
+<script>try { var m = JSON.parse(localStorage.getItem('mode')); if (m === 'dark' || m === 'light') document.documentElement.dataset.mode = m; } catch (e) {}</script>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-512.png">
+<link rel="preload" href="vendor/fonts/instrument-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
 <script src="vendor/jszip.min.js" defer></script>
 <script type="module" src="app.js"></script>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-books" viewBox="0 0 24 24"><path d="M4 19V5a1 1 0 0 1 1-1h3v16H5a1 1 0 0 1-1-1zM8 4h4v16H8M14.2 5.6l3.6-.9 3.2 13.6-3.6.9z"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01" stroke-width="2.8"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M19 7h1M4 17h3M13 17h7"/><circle cx="16" cy="7" r="2.6"/><circle cx="10" cy="17" r="2.6"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 20h14"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.6v12.8a.7.7 0 0 0 1.1.6l10-6.4a.7.7 0 0 0 0-1.2l-10-6.4a.7.7 0 0 0-1.1.6z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6.5" y="5" width="4" height="14" rx="1.2" fill="currentColor" stroke="none"/><rect x="13.5" y="5" width="4" height="14" rx="1.2" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-prev-ch" viewBox="0 0 24 24"><path d="M6 5.5v13"/><path d="M18 6.6v10.8a.6.6 0 0 1-.95.5l-7.7-5.4a.6.6 0 0 1 0-1l7.7-5.4a.6.6 0 0 1 .95.5z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-next-ch" viewBox="0 0 24 24"><path d="M18 5.5v13"/><path d="M6 6.6v10.8a.6.6 0 0 0 .95.5l7.7-5.4a.6.6 0 0 0 0-1l-7.7-5.4a.6.6 0 0 0-.95.5z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3"/><path d="M4.5 4.5v4h4"/></symbol>
+    <symbol id="i-fwd" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M10 11v5.5M14 11v5.5M6.5 7l.9 11.6a1 1 0 0 0 1 .9h7.2a1 1 0 0 0 1-.9L17.5 7M9.5 7V4.5h5V7"/></symbol>
+    <symbol id="i-sound" viewBox="0 0 24 24"><path d="M4 9.5v5h3.4l4.6 4v-13l-4.6 4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18.2 6.4a7.6 7.6 0 0 1 0 11.2"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  </defs>
+</svg>
+
 <header>
-  <button id="btn-library" class="icon" aria-label="Library">📚</button>
+  <button id="btn-library" class="icon" type="button" aria-label="Library"><svg class="ic" aria-hidden="true"><use href="#i-books"/></svg></button>
   <div class="hdr-mid">
     <div id="book-title">Novel Reader</div>
     <div class="sub"><span id="chapter-num"></span> <span id="chapter-title"></span></div>
   </div>
-  <button id="btn-offline" class="icon" aria-label="Prepare for offline / background listening">⬇</button>
-  <button id="btn-chapters" class="icon" aria-label="Chapters">☰</button>
-  <button id="btn-settings" class="icon" aria-label="Settings">⚙</button>
+  <button id="btn-offline" class="icon" type="button" aria-label="Save chapters for listening with the screen off"><svg class="ic" aria-hidden="true"><use href="#i-save"/></svg></button>
+  <button id="btn-chapters" class="icon" type="button" aria-label="Chapters"><svg class="ic" aria-hidden="true"><use href="#i-list"/></svg></button>
+  <button id="btn-settings" class="icon" type="button" aria-label="Voice and playback"><svg class="ic" aria-hidden="true"><use href="#i-sliders"/></svg></button>
 </header>
 
 <main id="text" aria-live="off">
   <div class="welcome">
-    <h2>🎧 Novel Reader</h2>
-    <p>Listen to your web novels with natural neural voices, running privately on your phone.</p>
-    <p>Open the 📚 library to import an EPUB or set up the webnovel button.</p>
+    <h1>Novel Reader</h1>
+    <p>Listen to your web novels with natural voices, running privately on your phone.</p>
+    <p>Open the library to import an EPUB or set up the chapter grabber.</p>
   </div>
 </main>
 
 <footer>
   <div id="status" role="status">Loading…</div>
   <div class="transport">
-    <button id="prev-ch" aria-label="Previous chapter">⏮</button>
-    <button id="back" aria-label="Back one passage">⟲</button>
-    <button id="play" class="big" aria-label="Play">▶</button>
-    <button id="fwd" aria-label="Forward one passage">⟳</button>
-    <button id="next-ch" aria-label="Next chapter">⏭</button>
-    <button id="speed-btn" class="speed" aria-label="Playback speed">1×</button>
+    <button id="prev-ch" type="button" aria-label="Previous chapter"><svg class="ic" aria-hidden="true"><use href="#i-prev-ch"/></svg></button>
+    <button id="back" type="button" aria-label="Back one passage"><svg class="ic" aria-hidden="true"><use href="#i-back"/></svg></button>
+    <button id="play" class="big" type="button" aria-label="Play"><svg class="ic" aria-hidden="true"><use href="#i-play"/></svg></button>
+    <button id="fwd" type="button" aria-label="Forward one passage"><svg class="ic" aria-hidden="true"><use href="#i-fwd"/></svg></button>
+    <button id="next-ch" type="button" aria-label="Next chapter"><svg class="ic" aria-hidden="true"><use href="#i-next-ch"/></svg></button>
+    <button id="speed-btn" class="speed" type="button" aria-label="Playback speed">1×</button>
   </div>
 </footer>
 
 <audio id="player" preload="auto"></audio>
 
 <section id="library" class="panel" aria-label="Library">
-  <div class="panel-hd"><h3>Library</h3><button class="close icon" aria-label="Close">✕</button></div>
+  <div class="panel-hd"><h2>Library</h2><button class="close icon" type="button" aria-label="Close"><svg class="ic" aria-hidden="true"><use href="#i-close"/></svg></button></div>
   <div class="panel-bd">
-    <label class="import">
+    <label class="import btn">
       <input id="file" type="file" accept=".epub,.txt,application/epub+zip,text/plain">
-      <span>＋ Import EPUB / TXT</span>
+      <svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg><span>Import EPUB or TXT</span>
     </label>
     <div id="import-msg" class="muted"></div>
     <ul id="library-list" class="list"></ul>
 
-    <details class="card" id="bm-card">
-      <summary>📲 Grab chapters from a website (bookmarklet)</summary>
-      <p>Chrome on Android has no extensions, but a <b>bookmarklet</b> does the same job: on a chapter page of any novel site (webnovel.com, novelping, etc.) it grabs that chapter and follows the "Next" links to collect the following ones and sends them here.</p>
+    <details class="well" id="bm-card">
+      <summary>Grab chapters from a website</summary>
+      <p>Chrome on Android has no extensions, but a <b>bookmarklet</b> does the same job: on a chapter page of any novel site (webnovel.com, novelping and others) it grabs that chapter, follows the next-chapter links to collect the following ones and sends them here.</p>
       <ol>
-        <li>Tap <b>Copy SHORT bookmarklet</b>.</li>
-        <li>In Chrome, bookmark any page (⋮ → ☆). Then ⋮ → Bookmarks → long-press it → <b>Edit</b>.</li>
+        <li>Tap <b>Copy short bookmarklet</b>.</li>
+        <li>In Chrome, bookmark any page (menu, then the star). Then menu, Bookmarks, long-press it, <b>Edit</b>.</li>
         <li>Name it <code>reader</code>, replace the URL with the copied text, save.</li>
-        <li>On a webnovel chapter, tap the address bar, type <code>reader</code> and tap the bookmark result (the one with the ☆, not a search).</li>
+        <li>On a chapter page, tap the address bar, type <code>reader</code> and tap the bookmark result (the one with the star, not a search).</li>
       </ol>
-      <button id="copy-short" class="btn">Copy SHORT bookmarklet</button>
+      <button id="copy-short" class="btn primary" type="button">Copy short bookmarklet</button>
       <span id="copy-short-msg" class="muted"></span>
-      <textarea id="bm-short" readonly rows="3"></textarea>
-      <p class="muted">If the short one does nothing, try the full version (larger, but doesn't need to download anything):</p>
-      <button id="copy-bm" class="btn">Copy FULL bookmarklet</button>
+      <textarea id="bm-short" readonly rows="3" aria-label="Short bookmarklet code"></textarea>
+      <p class="muted">If the short one does nothing, try the full version (larger, but it doesn't need to download anything):</p>
+      <button id="copy-bm" class="btn" type="button">Copy full bookmarklet</button>
       <span id="copy-msg" class="muted"></span>
-      <textarea id="bm-code" readonly rows="3"></textarea>
+      <textarea id="bm-code" readonly rows="3" aria-label="Full bookmarklet code"></textarea>
     </details>
   </div>
 </section>
 
 <section id="chapters" class="panel" aria-label="Chapters">
-  <div class="panel-hd"><h3>Chapters</h3><button class="close icon" aria-label="Close">✕</button></div>
+  <div class="panel-hd"><h2>Chapters</h2><button class="close icon" type="button" aria-label="Close"><svg class="ic" aria-hidden="true"><use href="#i-close"/></svg></button></div>
   <div class="panel-bd">
-    <form id="chapter-go"><input id="chapter-filter" type="search" placeholder="Search, or type a number + Enter" autocomplete="off"></form>
-    <a id="more-chapters" class="btn hidden" target="_blank" rel="noopener">Get more chapters on webnovel →</a>
+    <form id="chapter-go"><input id="chapter-filter" name="chapter" type="search" placeholder="Search, or type a number and Enter" autocomplete="off" aria-label="Find a chapter"></form>
+    <a id="more-chapters" class="btn hidden" target="_blank" rel="noopener">Get more chapters</a>
     <ul id="chapter-list" class="list chapters"></ul>
   </div>
 </section>
 
-<section id="offline" class="panel" aria-label="Listen in the background">
-  <div class="panel-hd"><h3>Listen with the screen off</h3><button class="close icon" aria-label="Close">✕</button></div>
+<section id="offline" class="panel" aria-label="Listen with the screen off">
+  <div class="panel-hd"><h2>Listen with the screen off</h2><button class="close icon" type="button" aria-label="Close"><svg class="ic" aria-hidden="true"><use href="#i-close"/></svg></button></div>
   <div class="panel-bd">
-    <p>Chrome pauses the voice engine when the app is in the background or the screen is off. To keep listening, <b>prepare</b> chapters first: the voice is generated now, while the screen is on, and saved on your phone (about 10 MB per hour). After that, playback in the background just plays the saved files.</p>
-    <p id="off-ready" class="ready"></p>
-    <div id="off-prog" class="prog hidden"><div id="off-bar"></div></div>
-    <div class="prep-btns">
-      <button class="btn" data-prep="1">This chapter</button>
-      <button class="btn" data-prep="3">Next 3</button>
-      <button class="btn" data-prep="5">Next 5</button>
-      <button class="btn" data-prep="10">Next 10</button>
+    <div class="well grained ready">
+      <div id="off-fig" class="figure">0:00</div>
+      <p id="off-ready"></p>
+      <div id="off-prog" class="prog hidden"><div id="off-bar"></div></div>
     </div>
-    <button id="off-stop" class="btn ghost hidden">Stop preparing</button>
-    <p class="muted">Keep this app open with the screen on while it prepares (it keeps the screen awake for you). You can keep listening at the same time. Saved audio is for the current voice; changing voice means preparing again. Finished chapters are cleaned up automatically.</p>
+    <p>Chrome pauses the voice engine when the app is in the background or the screen is off. Save chapters first: the voice is generated now, while the screen is on, and kept on your phone (about 10 MB per hour). Playback in the background then just plays the saved files.</p>
+    <div class="prep-btns" role="group" aria-label="Chapters to save">
+      <button class="btn" type="button" data-prep="1">This chapter</button>
+      <button class="btn" type="button" data-prep="3">Next 3</button>
+      <button class="btn" type="button" data-prep="5">Next 5</button>
+      <button class="btn" type="button" data-prep="10">Next 10</button>
+    </div>
+    <button id="off-stop" class="btn hidden" type="button">Stop saving</button>
+    <p class="muted">Keep this app open with the screen on while it works; it keeps the screen awake for you, and you can listen at the same time. Saved audio belongs to the current voice, so changing voice means saving again. Chapters you finished are cleaned up automatically.</p>
     <p id="off-storage" class="muted"></p>
-    <button id="off-clear" class="btn ghost">Delete saved audio for this book</button>
+    <button id="off-clear" class="btn quiet" type="button"><svg class="ic" aria-hidden="true"><use href="#i-trash"/></svg>Delete saved audio for this book</button>
   </div>
 </section>
 
-<section id="settings" class="panel" aria-label="Settings">
-  <div class="panel-hd"><h3>Voice &amp; playback</h3><button class="close icon" aria-label="Close">✕</button></div>
+<section id="settings" class="panel" aria-label="Voice and playback">
+  <div class="panel-hd"><h2>Voice and playback</h2><button class="close icon" type="button" aria-label="Close"><svg class="ic" aria-hidden="true"><use href="#i-close"/></svg></button></div>
   <div class="panel-bd">
     <label class="row">Voice
-      <select id="voice"></select>
+      <select id="voice" name="voice"></select>
     </label>
-    <button id="preview" class="btn">🔊 Preview voice</button>
+    <button id="preview" class="btn" type="button"><svg class="ic" aria-hidden="true"><use href="#i-sound"/></svg>Preview voice</button>
     <label class="row">Speed <span id="rate-val"></span>
-      <input id="rate" type="range" min="0.7" max="2.5" step="0.05">
+      <input id="rate" name="rate" type="range" min="0.7" max="2.5" step="0.05">
     </label>
     <label class="row">Engine
-      <select id="device">
+      <select id="device" name="device">
         <option value="auto">Auto (GPU if available)</option>
         <option value="wasm">CPU only</option>
       </select>
     </label>
-    <p class="muted">Voice: Kokoro-82M, open-source and running on your device. The first launch downloads ~330 MB (use Wi‑Fi); after that it works offline. Lock-screen and headphone buttons skip back or forward one passage.</p>
+    <label class="row">Appearance
+      <select id="mode" name="mode">
+        <option value="auto">Follow the phone</option>
+        <option value="dark">Dark</option>
+        <option value="light">Light</option>
+      </select>
+    </label>
+    <p class="muted">Voice: Kokoro-82M, open source and running on your device. The first launch downloads about 330 MB (use Wi-Fi); after that it works offline. Lock-screen and headphone buttons skip back or forward one passage.</p>
   </div>
 </section>
 </body>

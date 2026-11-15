@@ -7,8 +7,8 @@ const EMBED = params.has('embed');
 if (EMBED) document.documentElement.classList.add('embed');
 
 const VOICES = [
-  ['af_heart', 'Heart (US, female) ★ best'],
-  ['af_bella', 'Bella (US, female) ★'],
+  ['af_heart', 'Heart (US, female), recommended'],
+  ['af_bella', 'Bella (US, female), recommended'],
   ['af_nicole', 'Nicole (US, female, soft)'],
   ['bf_emma', 'Emma (UK, female)'],
   ['am_fenrir', 'Fenrir (US, male)'],
@@ -360,7 +360,7 @@ function playCurrent() {
 
 function next() {
   const n = step(pos);
-  if (!n) { playing = false; el.pause(); updatePlayBtn(); setStatus(book.source ? 'End of grabbed chapters. ☰ → "Get more chapters"' : 'End of book 🎉'); return; }
+  if (!n) { playing = false; el.pause(); updatePlayBtn(); setStatus(book.source ? 'End of the grabbed chapters. Open Chapters to get more.' : 'End of the book.'); return; }
   const chapterChanged = n.ch !== pos.ch;
   pos = n;
   if (chapterChanged) { renderChapter(); cleanupOldAudio(); }
@@ -407,7 +407,7 @@ let wakeLock = null;
 async function startPrepare(n) {
   if (!book) return;
   const from = pos.ch, to = Math.min(book.chapters.length - 1, pos.ch + n - 1);
-  prep = { from, to };
+  prep = { from, to, n };
   try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
   updateInfo();
   fill();
@@ -425,7 +425,7 @@ function finishPrepare() {
   try { wakeLock?.release(); } catch {}
   wakeLock = null;
   updateInfo();
-  if (done) setStatus(`✓ Chapters ${done.from + 1}–${done.to + 1} ready · safe to lock the phone`);
+  if (done) setStatus(`Chapters ${done.from + 1} to ${done.to + 1} are saved. You can lock the phone.`);
 }
 document.addEventListener('visibilitychange', async () => {
   if (document.visibilityState === 'visible' && prep && !wakeLock) { try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {} }
@@ -479,7 +479,7 @@ if ('mediaSession' in navigator) {
 // ---------- UI ----------
 function setStatus(s) { $('#status').textContent = s; }
 function updatePlayBtn() {
-  $('#play').textContent = playing ? '⏸' : '▶';
+  $('#play use').setAttribute('href', playing ? '#i-pause' : '#i-play');
   $('#play').setAttribute('aria-label', playing ? 'Pause' : 'Play');
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
 }
@@ -491,18 +491,21 @@ function updateInfo() {
   infoT = now;
   const st = prepStats();
   const bits = [];
-  if (prep) bits.push(`Preparing ch ${prep.from + 1}–${prep.to + 1}: ${Math.round(st.prepPct * 100)}% · keep screen on`);
+  if (prep) bits.push(`Saving chapters ${prep.from + 1} to ${prep.to + 1}: ${Math.round(st.prepPct * 100)}%, keep the screen on`);
   else if (ttsReady || st.secs) bits.push(`${fmtTime(st.secs)} ready`);
-  if (ttsReady && genInflight() && lastGenSpeed) bits.push(`${devName().split(' ')[0]} ${lastGenSpeed.toFixed(1)}×`);
-  if (!waiting) setStatus(bits.join(' · '));
-  // offline panel
+  if (ttsReady && genInflight() && lastGenSpeed) bits.push(`${devName().split(' ')[0]} at ${lastGenSpeed.toFixed(1)}×`);
+  if (!waiting) setStatus(bits.join(', '));
+  // screen-off sheet: one figure, its plain label beneath
+  const voiceName = (VOICES.find((v) => v[0] === settings.voice) || [0, settings.voice])[1].split(' (')[0];
+  $('#off-fig').textContent = fmtTime(st.secs);
   $('#off-ready').textContent = st.readyCh
-    ? `${st.readyCh} chapter${st.readyCh > 1 ? 's' : ''} saved ahead (≈ ${fmtTime(st.secs)} at ${settings.rate}×) with voice ${(VOICES.find((v) => v[0] === settings.voice) || [0, settings.voice])[1].split(' (')[0]}.`
-    : `${fmtTime(st.secs)} saved ahead. Prepare chapters before locking the phone.`;
+    ? `saved ahead at ${settings.rate}×: ${st.readyCh} chapter${st.readyCh > 1 ? 's' : ''} in the ${voiceName} voice.`
+    : 'saved ahead. Save a few chapters before you lock the phone.';
   $('#off-prog').classList.toggle('hidden', !prep);
   $('#off-stop').classList.toggle('hidden', !prep);
-  $('#off-bar').style.width = `${Math.round(st.prepPct * 100)}%`;
+  $('#off-bar').style.transform = `scaleX(${st.prepPct.toFixed(3)})`;
   $('#btn-offline').classList.toggle('busy', !!prep);
+  document.querySelectorAll('[data-prep]').forEach((b) => b.classList.toggle('on', !!prep && Number(b.dataset.prep) === prep.n));
 }
 
 let followUntil = 0;
@@ -617,11 +620,12 @@ async function renderLibrary() {
   const books = await listBooks();
   const ul = $('#library-list');
   ul.innerHTML = books.length ? '' : '<li class="empty">No books yet. Import an EPUB above, or grab chapters from a website.</li>';
+  const trash = '<svg class="ic" aria-hidden="true"><use href="#i-trash"/></svg>';
   for (const b of books) {
     const li = document.createElement('li');
-    li.innerHTML = `<div class="bt"></div><div class="ba"></div><button class="del" aria-label="Delete">🗑</button>`;
+    li.innerHTML = `<div class="bt"></div><div class="ba"></div><button class="del icon" type="button" aria-label="Delete">${trash}</button>`;
     li.querySelector('.bt').textContent = b.title;
-    li.querySelector('.ba').textContent = `${b.author ? b.author + ' · ' : ''}${b.n} chapters`;
+    li.querySelector('.ba').textContent = `${b.author ? b.author + ', ' : ''}${b.n} chapters`;
     li.onclick = (e) => { if (!e.target.closest('.del')) openBook(b.id); };
     li.querySelector('.del').onclick = async () => {
       if (!confirm(`Delete "${b.title}" (and its saved audio) from this device?`)) return;
@@ -710,7 +714,7 @@ voiceSel.onchange = () => {
   dropQueued();
   fill();
   updateInfo();
-  setStatus('Voice changes after this passage');
+  setStatus('The new voice starts after this passage.');
 };
 $('#preview').onclick = () => {
   if (!ttsReady) return setStatus('Voice engine still loading…');
@@ -731,6 +735,13 @@ $('#speed-btn').onclick = () => {
 const devSel = $('#device');
 devSel.value = settings.device;
 devSel.onchange = () => { store.set('device', devSel.value); location.reload(); };
+const modeSel = $('#mode');
+modeSel.value = store.get('mode', 'auto');
+modeSel.onchange = () => {
+  store.set('mode', modeSel.value);
+  if (modeSel.value === 'auto') delete document.documentElement.dataset.mode;
+  else document.documentElement.dataset.mode = modeSel.value;
+};
 
 // keyboard (desktop)
 document.addEventListener('keydown', (e) => {
@@ -775,7 +786,7 @@ function updateMoreLink() {
   if (m) a.href = `https://www.webnovel.com/book/${m[1]}/${last.id}`;
   else if (last && /^https?:/.test(String(last.id))) a.href = last.id;
   else { a.classList.add('hidden'); return; }
-  a.textContent = 'Get more chapters (opens the last chapter, then run the bookmarklet) →';
+  a.textContent = 'Get more chapters: opens the last chapter, then run the bookmarklet';
   a.classList.remove('hidden');
 }
 
@@ -799,7 +810,7 @@ async function importChapters(d) {
   const first = chapters.findIndex((c) => c.id === String(d.chapters[0].id));
   store.set('pos:' + id, { ch: Math.max(0, first), i: 0 });
   await openBook(id);
-  setStatus(`Added ${d.chapters.length} chapter(s) · tap ▶ to listen, or ⬇ to prepare them`);
+  setStatus(`Added ${d.chapters.length} chapter${d.chapters.length > 1 ? 's' : ''}. Tap play to listen.`);
 }
 // Chapters can also arrive in the address itself (#import=<gzip+base64url JSON>),
 // from the "Open in Reader" link — that path can't be stopped by pop-up blockers.
@@ -818,7 +829,7 @@ async function decodeHashPayload(s) {
     try {
       const d = await decodeHashPayload(hm[1]);
       if (validPayload(d)) { await importChapters(d); return; }
-      setStatus('Those chapters could not be read 😕');
+      setStatus('Those chapters could not be read.');
     } catch (e) { console.error(e); setStatus('Those chapters could not be read: ' + e.message); }
   }
   const host = window.opener || (window.parent !== window ? window.parent : null);
