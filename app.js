@@ -1,4 +1,5 @@
 import { parseEpub, parseTxt } from './epub.js';
+import { Tape, tapeSupported } from './tape.js';
 
 const $ = (s) => document.querySelector(s);
 const params = new URLSearchParams(location.search);
@@ -233,13 +234,14 @@ worker.onmessage = (e) => {
         .catch((err) => { console.warn('could not save audio', err); setStatus('Phone storage full? Could not save audio.'); });
       if (book && book.id === job.bookId) {
         stored.set(job.k, m.dur);
-        if (inWindow(job)) mem.set(job.k, { url: URL.createObjectURL(m.blob), dur: m.dur, ch: job.ch, i: job.i });
+        if (inWindow(job)) mem.set(job.k, { url: URL.createObjectURL(m.blob), blob: m.blob, dur: m.dur, ch: job.ch, i: job.i });
       }
     } else {
       console.error(m.msg);
       if (book && book.id === job.bookId) mem.set(job.k, { failed: true, dur: 0, ch: job.ch, i: job.i });
     }
     if (waiting && book && job.k === akey(pos)) playCurrent();
+    if (tape && tape.active) tape.pump();
     fill();
     updateInfo();
   } else if (m.type === 'dropped') {
@@ -298,9 +300,10 @@ function fill() {
     getAudio(k).then((r) => {
       lookups.delete(k);
       if (!book || book.id !== bookId) return;
-      if (r && r.blob) mem.set(k, { url: URL.createObjectURL(r.blob), dur: r.dur, ch: q.ch, i: q.i });
+      if (r && r.blob) mem.set(k, { url: URL.createObjectURL(r.blob), blob: r.blob, dur: r.dur, ch: q.ch, i: q.i });
       else stored.delete(k);
       if (waiting && k === akey(pos)) playCurrent();
+      if (tape && tape.active) tape.pump();
       fill();
     }).catch(() => { lookups.delete(k); stored.delete(k); fill(); });
   }
@@ -348,6 +351,48 @@ function resetMem() {
 function dropQueued() { worker.postMessage({ type: 'clear' }); }
 
 // ---------- playback ----------
+// Preferred: one continuous stream (tape.js) so Chrome never sees playback stop
+// between passages, even in the background. Fallback: one file per passage.
+let tape = null;
+if (tapeSupported() && !params.has('notape')) {
+  tape = new Tape(el, {
+    async getAudio(p) {
+      if (!book) return null;
+      const k = akey(p);
+      const m = mem.get(k);
+      if (m && m.failed) return 'skip';
+      let blob = m && m.blob;
+      if (!blob && stored.has(k)) { try { blob = (await getAudio(k))?.blob; } catch {} }
+      if (blob && !/ogg/.test(blob.type)) { useFileMode(); return null; }
+      return blob || null;
+    },
+    next: (p) => step(p),
+    onPos(p) {
+      if (!book || cmp(p, pos) === 0) return;
+      const chapterChanged = p.ch !== pos.ch;
+      pos = p;
+      if (chapterChanged) { renderChapter(); cleanupOldAudio(); updateMediaSession(); }
+      renderHighlight();
+      saveProgress();
+      fill();
+      updateInfo();
+    },
+    onEnd() { if (playing) endReached(); },
+    onError(e) { console.warn('stream failed, switching to file-by-file playback', e); useFileMode(); if (playing) { playing = false; play(); } },
+  });
+}
+function useFileMode() { if (tape) { tape.stop(); tape = null; } }
+function endReached() {
+  playing = false; el.pause(); updatePlayBtn();
+  setStatus(book.source ? 'End of the grabbed chapters. Open Chapters to get more.' : 'End of the book.');
+}
+el.addEventListener('waiting', () => {
+  if (!tape || !playing) return;
+  if (document.hidden) away.stalls++;
+  setStatus(ttsReady ? 'Generating…' : 'Loading voice engine…');
+});
+el.addEventListener('playing', () => updateInfo());
+
 function playCurrent() {
   if (!book) return;
   const a = mem.get(akey(pos));
@@ -379,18 +424,26 @@ function playCurrent() {
 
 function next() {
   const n = step(pos);
-  if (!n) { playing = false; el.pause(); updatePlayBtn(); setStatus(book.source ? 'End of the grabbed chapters. Open Chapters to get more.' : 'End of the book.'); return; }
+  if (!n) { endReached(); return; }
   const chapterChanged = n.ch !== pos.ch;
   pos = n;
   if (chapterChanged) { renderChapter(); cleanupOldAudio(); }
   playCurrent();
 }
 
-el.addEventListener('ended', () => { if (document.hidden) away.played += el.duration || 0; if (!waiting) next(); });
+el.addEventListener('ended', () => { if (tape) return; if (document.hidden) away.played += el.duration || 0; if (!waiting) next(); });
 
-function play() {
+async function play() {
   if (!book) return;
   playing = true; updatePlayBtn();
+  if (tape) {
+    if (!tape.active) await tape.start(pos);
+    el.defaultPlaybackRate = settings.rate; el.playbackRate = settings.rate;
+    renderHighlight(); updateMediaSession();
+    el.play().catch((e) => console.warn(e));
+    fill();
+    return;
+  }
   if (waiting || !el.src || el.src === silentUrl || el.ended) playCurrent();
   else el.play().catch(() => playCurrent());
 }
@@ -402,6 +455,13 @@ function jump(p) {
   pos = p;
   dropQueued();
   if (chapterChanged) renderChapter();
+  if (tape) {
+    el.pause();
+    tape.stop();
+    renderHighlight(); saveProgress(); fill();
+    if (playing) play();
+    return;
+  }
   if (playing) { el.pause(); playCurrent(); } else { renderHighlight(); saveProgress(); fill(); }
 }
 function skip(dir) { const p = step(pos, dir); if (p) jump(p); }
@@ -450,11 +510,12 @@ function finishPrepare() {
 const away = { since: 0, played: 0, made: 0, stalls: 0, wasPlaying: false };
 document.addEventListener('visibilitychange', async () => {
   if (document.hidden) {
-    Object.assign(away, { since: Date.now(), played: 0, made: 0, stalls: 0, wasPlaying: playing });
+    Object.assign(away, { since: Date.now(), played: 0, made: 0, stalls: 0, wasPlaying: playing, t0: el.currentTime });
     return;
   }
   if (prep && !wakeLock) { try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {} }
   const gone = (Date.now() - away.since) / 1000;
+  if (tape && tape.active) away.played = Math.max(0, el.currentTime - away.t0);
   if (away.since && away.wasPlaying && gone > 20) {
     const m = (x) => (x < 90 ? `${Math.round(x)} s` : `${Math.round(x / 60)} min`);
     const msg = `While away (${m(gone)}): played ${m(away.played / settings.rate)}, made ${m(away.made)} of new audio` +
@@ -606,6 +667,7 @@ async function openBook(id) {
   const b = await getBook(id);
   if (!b) return;
   pause();
+  if (tape) tape.stop();
   dropQueued();
   pending.clear();
   resetMem();
@@ -747,6 +809,7 @@ voiceSel.onchange = () => {
   // The passage that's playing now finishes in the old voice; the next one uses the new voice.
   settings.voice = voiceSel.value; store.set('voice', settings.voice);
   dropQueued();
+  if (tape) tape.cutAfter(pos);
   fill();
   updateInfo();
   setStatus('The new voice starts after this passage.');
