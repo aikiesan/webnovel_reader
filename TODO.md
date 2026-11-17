@@ -23,6 +23,10 @@ What works: grabbing 10 chapters on novelping with the SHORT bookmarklet; floati
 - Screen off: deep queue (40 min) when hidden, engine retries + watchdog, auto-resume, screen-off report in Settings. **Waiting for a real report from the phone.**
 - Voice: dialogue-aware segments (narration / dialogue / [system]), male/female speaker guess, per-kind voice and pace, pause scale, pronunciation list.
 
-## Next
-- PDF import for scientific papers (pdf.js; skip references, citations, headers/footers, hyphenation, two columns).
-- Chrome extension (desktop): read the current page or PDF with one click.
+## Round 3
+- PDF import for scientific papers: done (paper.js). Tested on generated two-column and IEEE-style papers; needs real arXiv/journal PDFs.
+- Chrome extension: done (extension/, zip from 📚). Tested loaded in Chromium: PDF → Reader sections, page → grabber.
+
+## Ideas
+- Paper extras: read figure captions on/off, skip "Acknowledgements", a "summary first" mode (abstract + conclusion).
+- Scanned PDFs (images only) would need OCR.

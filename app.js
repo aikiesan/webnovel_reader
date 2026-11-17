@@ -871,28 +871,51 @@ async function renderLibrary() {
   }
 }
 
-$('#file').addEventListener('change', async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
+async function importFile(file) {
   const msg = $('#import-msg');
   try {
-    msg.textContent = 'Reading book…';
-    const progress = (f) => { msg.textContent = `Reading… ${Math.round(f * 100)}%`; };
+    msg.textContent = 'Reading…';
+    setStatus(`Reading ${file.name}…`);
+    const progress = (f) => { msg.textContent = `Reading… ${Math.round(f * 100)}%`; setStatus(`Reading ${file.name}… ${Math.round(f * 100)}%`); };
     const parsed = /\.epub$/i.test(file.name) ? await parseEpub(file, progress)
       : /\.pdf$/i.test(file.name) || file.type === 'application/pdf' ? await (await import('./paper.js')).parsePdf(file, progress)
       : await parseTxt(file);
-    if (!parsed.chapters.length) throw new Error('No chapters found');
+    if (!parsed.chapters.length) throw new Error(parsed.kind === 'paper' ? 'No readable text found (is it a scanned PDF?)' : 'No chapters found');
     const id = `${parsed.title}|${parsed.chapters.length}`;
     await saveBook({ id, ...parsed, added: Date.now() });
     msg.textContent = `Imported ${parsed.chapters.length} ${parsed.kind === 'paper' ? 'sections' : 'chapters'}.`;
     await renderLibrary();
-    openBook(id);
+    await openBook(id);
+    setStatus(`Opened "${parsed.title}". Tap play to listen.`);
   } catch (err) {
     console.error(err);
     msg.textContent = 'Could not read that file: ' + err.message;
+    setStatus('Could not read that file: ' + err.message);
   }
+}
+$('#file').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (file) await importFile(file);
   e.target.value = '';
 });
+
+// A PDF handed over by the Chrome extension (?import=pdf). The extension posts
+// it into this page once the page says it is listening.
+if (params.get('import') === 'pdf') {
+  let got = false;
+  window.addEventListener('message', async (e) => {
+    const d = e.data;
+    if (got || e.source !== window || e.origin !== location.origin || !d || d.type !== 'reader-pdf' || typeof d.b64 !== 'string') return;
+    got = true;
+    history.replaceState(null, '', location.pathname);
+    const bin = atob(d.b64);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    await importFile(new File([u8], String(d.name || 'paper.pdf').slice(0, 200), { type: 'application/pdf' }));
+  });
+  document.documentElement.dataset.readerListening = '1';
+  setStatus('Waiting for the PDF…');
+}
 
 // panels
 function closePanels() { document.querySelectorAll('.panel.open').forEach((p) => p.classList.remove('open')); }

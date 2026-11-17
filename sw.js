@@ -2,7 +2,7 @@
 // falling back to the cache when offline. Big vendor files and the voice
 // engine's WASM: cache first. The voice model itself is cached by
 // transformers.js in its own cache.
-const CACHE = 'reader-v12';
+const CACHE = 'reader-v13';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'tape.js', 'paper.js', 'epub.js', 'tts-worker.js', 'grab.js', 'grab.min.js', 'vendor/jszip.min.js', 'vendor/kokoro.web.js', 'vendor/fonts/instrument-sans-latin.woff2', 'vendor/fonts/young-serif-latin.woff2', 'manifest.webmanifest', 'icon.svg', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
