@@ -1,5 +1,6 @@
 import { parseEpub, parseTxt } from './epub.js';
 import { Tape, tapeSupported } from './tape.js';
+import { paperSpeech } from './paper.js';
 
 const $ = (s) => document.querySelector(s);
 const params = new URLSearchParams(location.search);
@@ -136,9 +137,11 @@ async function deleteBook(id) {
 }
 
 // ---------- text -> speakable chunks ----------
-function speakable(s) {
+function speakable(s, paper = false) {
+  if (paper) s = paperSpeech(s);
   return s
     .replace(/https?:\/\/\S+/g, '')
+    .replace(/\bdoi:\s*\S+/gi, '')
     .replace(/[【〖「『\[<{]/g, ' ')
     .replace(/[】〗」』\]>}]/g, ', ')
     .replace(/…/g, '...')
@@ -149,7 +152,7 @@ function speakable(s) {
     .replace(/([!?])[!?]{2,}/g, '$1')          // "?!!!" -> "?"
     .replace(/!{2,}/g, '!').replace(/\?{2,}/g, '?')
     .replace(/([A-Za-z])\1{3,}/g, '$1$1$1')      // "Ahhhhhhh" -> "Ahhh"
-    .replace(/\b[A-Z][A-Z']{3,}\b/g, (w) => w[0] + w.slice(1).toLowerCase()) // SHOUTING isn't spelled out
+    .replace(/\b[A-Z][A-Z']{3,}\b/g, (w) => (paper ? w : w[0] + w.slice(1).toLowerCase())) // SHOUTING isn't spelled out (papers keep acronyms)
     .replace(/\bLv\.\s*/g, 'Level ')
     .replace(/(^|[\s(])x(\d+)\b/g, '$1times $2')
     .replace(/,\s*([,.!?])/g, '$1').replace(/^[,\s]+/, '').replace(/\s*,\s*,/g, ',')
@@ -203,14 +206,16 @@ function splitSegments(para) {
   const spk = guessSpeaker(segs.filter((x) => x.kind === 'n').map((x) => x.raw).join(' '));
   return segs.map((x) => ({ ...x, spk: x.kind === 'd' ? spk : null }));
 }
-function paraChunks(para, MAX = 260) {
+function paraChunks(para, MAX = 260, paper = false) {
   const pieces = [];
-  for (const seg of splitSegments(para)) {
-    const t = speakable(seg.raw);
+  // papers: one narrator; quotes aren't dialogue and [12] isn't a system message
+  for (const seg of paper ? [{ kind: 'n', spk: null, raw: para }] : splitSegments(para)) {
+    // keep decimals like 4.2 inside one sentence
+    const t = speakable(seg.raw, paper).replace(/(\d)\.(\d)/g, '$1\u2024$2');
     if (!hasWords(t)) continue;
     const sentences = t.match(/[^.!?]+(?:[.!?]+["'”’)]*|$)\s*/g) || [t];
     for (let sn of sentences) {
-      sn = sn.trim();
+      sn = sn.replace(/\u2024/g, '.').trim();
       if (!sn) continue;
       for (const piece of splitLong(sn, MAX)) pieces.push({ kind: seg.kind, spk: seg.spk, text: piece });
     }
@@ -228,11 +233,16 @@ function paraChunks(para, MAX = 260) {
   if (cur) out.push(cur);
   return out.map((c) => ({ segs: c.segs, text: c.segs.map((x) => x.text).join(' ') }));
 }
-function buildChunks(chapter) {
-  const title = speakable(chapter.title).replace(/[.!?,]*$/, '.');
+// Papers: say "Introduction", not "I. INTRODUCTION" or "2.1 Methods".
+const spokenHeading = (t) => {
+  t = t.replace(/^((\d{1,2}(\.\d{1,2}){0,3})\.?|[IVX]{1,5}\.|[A-H]\.?(\d{1,2}(\.\d{1,2})?)?)\s+(?=[A-Z])/, '');
+  return t === t.toUpperCase() ? t.toLowerCase().replace(/(^|\s)\p{L}/gu, (m) => m.toUpperCase()) : t;
+};
+function buildChunks(chapter, paper = false) {
+  const title = speakable(paper ? spokenHeading(chapter.title) : chapter.title, paper).replace(/[.!?,]*$/, '.');
   const chunks = [{ segs: [{ kind: 'n', spk: null, text: title }], text: title, p0: -1, p1: -1, pad: PAUSE.title }];
   chapter.paras.forEach((para, pi) => {
-    const pcs = paraChunks(para);
+    const pcs = paraChunks(paper && /^\S+\s+[A-Z][^.]{0,90}\.$/.test(para) && para.length < 100 ? spokenHeading(para) : para, 260, paper);
     const isDialogue = /^\s*["“'‘]/.test(para);
     pcs.forEach((c, k) => {
       const last = k === pcs.length - 1;
@@ -261,7 +271,7 @@ let curUrl = null;            // blob url currently in the <audio> element
 
 const el = $('#player');
 const chunksOf = (ch) => {
-  if (!chunkCache.has(ch)) chunkCache.set(ch, buildChunks(book.chapters[ch]));
+  if (!chunkCache.has(ch)) chunkCache.set(ch, buildChunks(book.chapters[ch], book.kind === 'paper'));
   return chunkCache.get(ch);
 };
 const chId = (ch) => { const c = book.chapters[ch]; return c.id != null ? String(c.id) : String(ch); };
@@ -867,13 +877,14 @@ $('#file').addEventListener('change', async (e) => {
   const msg = $('#import-msg');
   try {
     msg.textContent = 'Reading book…';
-    const parsed = /\.epub$/i.test(file.name)
-      ? await parseEpub(file, (f) => { msg.textContent = `Reading book… ${Math.round(f * 100)}%`; })
+    const progress = (f) => { msg.textContent = `Reading… ${Math.round(f * 100)}%`; };
+    const parsed = /\.epub$/i.test(file.name) ? await parseEpub(file, progress)
+      : /\.pdf$/i.test(file.name) || file.type === 'application/pdf' ? await (await import('./paper.js')).parsePdf(file, progress)
       : await parseTxt(file);
     if (!parsed.chapters.length) throw new Error('No chapters found');
     const id = `${parsed.title}|${parsed.chapters.length}`;
     await saveBook({ id, ...parsed, added: Date.now() });
-    msg.textContent = `Imported ${parsed.chapters.length} chapters.`;
+    msg.textContent = `Imported ${parsed.chapters.length} ${parsed.kind === 'paper' ? 'sections' : 'chapters'}.`;
     await renderLibrary();
     openBook(id);
   } catch (err) {
